@@ -1,6 +1,6 @@
 # nostrax
 
-Welcome to nostrax, a sophisticated tool designed for efficient extraction of URLs and paths from web pages. Inspired by "Nostos", the Greek concept of a heroic return journey, this tool aids in the digital exploration and mapping of the web.
+A sophisticated tool designed for efficient extraction of URLs and paths from web pages. Inspired by "Nostos", the Greek concept of a heroic return journey, this tool aids in the digital exploration and mapping of the web.
 <p align="center">
   <img width="460" height="460" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a)">
 </p>
