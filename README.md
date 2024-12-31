@@ -1,8 +1,8 @@
-# NostosTrailMapper
+# nostrax
 
-Welcome to NostosTrailMapper, a sophisticated tool designed for efficient extraction of URLs and paths from web pages. Inspired by "Nostos", the Greek concept of a heroic return journey, this tool aids in the digital exploration and mapping of the web.
+Welcome to nostrax, a sophisticated tool designed for efficient extraction of URLs and paths from web pages. Inspired by "Nostos", the Greek concept of a heroic return journey, this tool aids in the digital exploration and mapping of the web.
 <p align="center">
-  <img width="460" height="460" src="https://github.com/prodrom3/NostosTrailMapper/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a)">
+  <img width="460" height="460" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a)">
 </p>
 
 ## Features
@@ -17,27 +17,27 @@ Welcome to NostosTrailMapper, a sophisticated tool designed for efficient extrac
 Clone this repository and set up the environment with the following commands:
 
 ```bash
-git clone https://github.com/yourusername/NostosTrailMapper.git
-cd NostosTrailMapper
+git clone https://github.com/yourusername/nostrax.git
+cd nostrax
 pip install -r requirements.txt
 ```
 
 ## Usage
-Run NostosTrailMapper using:
+Run nostrax using:
 ```shell
-python ntmp.py -t [target-url]
+python nostrax.py -t [target-url]
 ```
 
 To see all options:
 ```shell
-python ntmp.py -h
+python nostrax.py -h
 ```
 
 ## Contributing
 Contributions are welcome. Please fork this repository, commit your changes, and submit a pull request.
 
 ## License
-NostosTrailMapper is under the MIT License. See the LICENSE file for more details.
+nostrax is under the MIT License. See the LICENSE file for more details.
 
 ## Acknowledgments
 Thanks to all the contributors who make this project possible.
