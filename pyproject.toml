@@ -12,12 +12,9 @@ requires-python = ">=3.10"
 authors = [
     { name = "prodrom3" },
 ]
-<<<<<<< HEAD
 maintainers = [
     { name = "radamic" },
 ]
-=======
->>>>>>> 1de86f70cfb3ede799c9f714a1d5d8142c72890e
 dependencies = [
     "aiohttp>=3.9",
     "beautifulsoup4>=4.12",

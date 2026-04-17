@@ -9,7 +9,8 @@
 [![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/prodrom3/nostrax)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Async](https://img.shields.io/badge/async-aiohttp-blue.svg)](https://docs.aiohttp.org/)
-[![Tests](https://img.shields.io/badge/tests-100%2B-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-150%2B-brightgreen.svg)](tests/)
+[![SemVer](https://img.shields.io/badge/semver-2.0.0-blue.svg)](https://semver.org/)
 
 <img width="360" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a">
 
@@ -19,7 +20,9 @@
 
 ## Overview
 
-**nostrax** is a production-grade, async web crawler and URL extraction toolkit designed for mapping, analyzing, and auditing websites. Built on `aiohttp` and `lxml`, it combines high-throughput concurrent crawling with security-hardened input handling to serve SEO, QA, security research, and infrastructure auditing workflows.
+**nostrax** is a production-grade, async web crawler and URL extraction toolkit for mapping, analyzing, and auditing websites at scale. Built on `aiohttp` and `lxml`, it pairs high-throughput concurrent crawling with security-hardened input handling for SEO, QA, security research, and infrastructure audit workflows in regulated environments.
+
+It is designed to be embedded in CI pipelines, scheduled jobs, and internal tooling - with deterministic exit codes, structured output, standards-based logging, zero telemetry, and no outbound calls beyond the sites you explicitly target.
 
 The name derives from "Nostos" - the Greek concept of a heroic return journey - reflecting the tool's purpose of mapping the digital landscape.
 
@@ -27,14 +30,19 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 - [Why nostrax](#why-nostrax)
 - [Features](#features)
+- [Compatibility](#compatibility)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Common Workflows](#common-workflows)
 - [Configuration](#configuration)
 - [Python API](#python-api)
 - [CLI Reference](#cli-reference)
+- [Exit Codes](#exit-codes)
+- [Observability](#observability)
 - [Architecture](#architecture)
 - [Security](#security)
+- [Versioning and Stability](#versioning-and-stability)
+- [Support](#support)
 - [Development](#development)
 - [License](#license)
 
@@ -90,6 +98,20 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 - **Progress bar** via optional `tqdm` dependency
 - **Config file** via `.nostraxrc` (TOML format)
 - **PyPI version check** via `--check-update`
+
+## Compatibility
+
+| Component | Supported |
+|---|---|
+| Python | 3.10, 3.11, 3.12, 3.13 |
+| Operating systems | Linux, macOS, Windows |
+| Architectures | x86_64, arm64 |
+| Runtime dependencies | `aiohttp >= 3.9`, `beautifulsoup4 >= 4.12`, `lxml >= 5.0` |
+| Optional dependencies | `tqdm >= 4.60` (progress bar) |
+| Network | Outbound HTTP/HTTPS to target hosts; HTTP/HTTPS/SOCKS4/SOCKS5 proxy support |
+| Packaging | PEP 517 / PEP 621 (`pyproject.toml`), installs via `pip` or any PEP 517 frontend |
+
+No telemetry is collected. The process makes no network calls to third parties beyond the target host(s) and, when explicitly requested, a single PyPI lookup via `--check-update`.
 
 ## Installation
 
@@ -357,6 +379,34 @@ JSON output with `--metadata`:
 ]
 ```
 
+## Exit Codes
+
+nostrax returns deterministic exit codes suitable for CI gates and orchestration:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success - crawl completed and output was produced |
+| `1` | Failure - invalid input, network error, write failure, or no URLs discovered |
+| `2` | Argument parsing error (`argparse` default) |
+
+Combine with `--silent` to suppress stdout and rely on the exit code alone in pipelines.
+
+## Observability
+
+nostrax uses Python's standard `logging` module with module-level loggers under the `nostrax.*` namespace. No logging is configured by default when used as a library - callers control destinations, format, and levels.
+
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logging.getLogger("nostrax").setLevel(logging.DEBUG)
+```
+
+From the CLI, use `-v` / `--verbose` to raise the default log level to `DEBUG`. Loggers are namespaced by module (`nostrax.crawler`, `nostrax.robots`, `nostrax.validation`, etc.) so operators can filter or route per-subsystem to JSON log aggregators, SIEM pipelines, or structured log processors of their choice.
+
 ## Architecture
 
 ```mermaid
@@ -412,19 +462,60 @@ flowchart TD
 
 ## Security
 
-nostrax is hardened against common web-scraping attack vectors:
+nostrax is hardened by default against common attack vectors in crawler and scraper tooling. Defenses are implemented as non-optional controls inside `nostrax.validation`, `nostrax.sitemap`, `nostrax.normalize`, and the request layer - they are not opt-in flags.
 
-- **SSRF prevention** - target URL validation rejects `file://`, private IPs, loopback, localhost, and cloud metadata endpoints (169.254.169.254)
-- **XXE prevention** - sitemap parser rejects XML with `<!DOCTYPE>` or `<!ENTITY>` declarations
-- **Sitemap loop protection** - max recursion depth of 5 with cycle detection
-- **Path traversal prevention** - cache and output files restricted to the working directory
-- **Header injection prevention** - User-Agent validated for newlines and length
-- **Open redirect prevention** - redirects disabled on all HTTP requests
-- **ReDoS mitigation** - regex patterns validated, catastrophic backtracking caught
-- **Response size limits** - default 10 MB cap prevents memory exhaustion
-- **Credential scrubbing** - userinfo stripped from normalized URLs
+### Security controls
 
-To report a security vulnerability, please open a private security advisory on GitHub.
+| Control | Mitigation |
+|---|---|
+| **SSRF prevention** | Target URL validation rejects `file://`, private IPs (RFC 1918), loopback, link-local, and cloud metadata endpoints (169.254.169.254) |
+| **XXE prevention** | Sitemap parser rejects XML containing `<!DOCTYPE>` or `<!ENTITY>` declarations |
+| **Sitemap loop protection** | Max recursion depth of 5 with cycle detection on sitemap indexes |
+| **Path traversal prevention** | Cache and output file paths are restricted to the working directory |
+| **Header injection prevention** | `User-Agent` values are validated for CR/LF and length bounds |
+| **Open redirect prevention** | HTTP redirect following is disabled on all fetches |
+| **ReDoS mitigation** | User-supplied regex patterns are validated and catastrophic backtracking is caught |
+| **Response size limits** | Default 10 MB per-response cap prevents memory exhaustion |
+| **Credential scrubbing** | `userinfo` (`user:pass@`) components are stripped during URL normalization |
+| **Content-Type gating** | Non-HTML responses are skipped before download where possible |
+
+### Supply chain
+
+- All runtime dependencies are published, pinned-by-floor packages (`aiohttp`, `beautifulsoup4`, `lxml`).
+- No runtime code execution of scraped content - HTML is parsed, never rendered in a JavaScript engine.
+- No outbound telemetry. The only optional outbound call outside of targets is `--check-update`, which queries PyPI on explicit user request.
+
+### Responsible disclosure
+
+Please do **not** file public GitHub issues for suspected vulnerabilities. Instead:
+
+1. Open a [GitHub private security advisory](https://github.com/prodrom3/nostrax/security/advisories/new) on this repository, or
+2. Contact the maintainers privately with a reproduction and impact assessment.
+
+Maintainers aim to acknowledge reports within 5 business days and provide a remediation timeline based on severity. Fixes for confirmed high-severity issues are released as patch versions; mitigations and affected-version ranges are documented in the release notes.
+
+## Versioning and Stability
+
+nostrax follows [Semantic Versioning 2.0.0](https://semver.org/).
+
+- **Major** (`X.0.0`) - backwards-incompatible changes to the public Python API (`nostrax.crawl`, `nostrax.crawl_async`, `nostrax.extract_urls`, `nostrax.normalize_url`, `nostrax.UrlResult`, `nostrax.NostraxError`) or to documented CLI flags and output schemas.
+- **Minor** (`2.X.0`) - additive changes: new flags, new fields in structured output (JSON/CSV additive only), new optional parameters with safe defaults.
+- **Patch** (`2.0.X`) - bug fixes, security fixes, documentation, dependency floor bumps that do not change behaviour.
+
+The public surface is the symbols exported from `nostrax.__init__` and the CLI flags documented in this README. Anything under `nostrax._*` or any module not re-exported from the top-level package is considered internal and may change without notice.
+
+Security-only patch releases are issued out-of-band for confirmed vulnerabilities with the corresponding advisory.
+
+## Support
+
+| Channel | Purpose |
+|---|---|
+| [GitHub Issues](https://github.com/prodrom3/nostrax/issues) | Bug reports, feature requests, usage questions |
+| [GitHub Discussions](https://github.com/prodrom3/nostrax/discussions) | Design discussion, Q&A, community workflows |
+| [Security advisories](https://github.com/prodrom3/nostrax/security/advisories) | Private disclosure of suspected vulnerabilities |
+| [Releases](https://github.com/prodrom3/nostrax/releases) | Release notes, changelog, upgrade guidance |
+
+This project is maintained on a best-effort basis by the authors and community contributors under the MIT License. No commercial SLA is offered through this repository; organisations requiring a formal support arrangement should contact the maintainers directly.
 
 ## Development
 
@@ -432,10 +523,12 @@ To report a security vulnerability, please open a private security advisory on G
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                            # 150+ tests across 16 modules
 pytest --cov=nostrax              # With coverage
 pytest tests/test_crawler.py      # Single module
 ```
+
+Tests use `pytest`, `pytest-asyncio`, `pytest-cov`, and `aioresponses` - all declared in the `dev` optional dependency group. The suite covers crawling, extraction, filtering, normalization, sitemap parsing, robots compliance, cache resume, CLI argument parsing, input validation (SSRF, path traversal, header injection, ReDoS), and output formatting.
 
 ### Code style
 
@@ -447,13 +540,13 @@ black nostrax tests               # Format
 
 Contributions are welcome. Please:
 
-1. Fork the repository
-2. Create a feature branch (`feature/my-feature`)
-3. Add tests for your changes
-4. Ensure `pytest` passes
-5. Submit a pull request
+1. Fork the repository and create a feature branch (`feature/my-feature`).
+2. Add or update tests for your change - new code is expected to keep coverage steady or improve it.
+3. Run `pytest` and `black nostrax tests` before opening a pull request.
+4. Keep commits focused; prefer small, reviewable PRs over large ones.
+5. Sign off or otherwise indicate you have the right to contribute the code under the MIT License.
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/) for commit messages: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `perf:`, `ci:`.
 
 ## Author
 
@@ -461,7 +554,7 @@ Created by [**prodrom3**](https://github.com/prodrom3) at [**radamic**](https://
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE). The MIT License imposes no restrictions on commercial use, modification, distribution, or private use, subject to inclusion of the copyright notice and license text. Third-party dependencies retain their own licenses; review them before redistributing bundled artifacts.
 
 ## Acknowledgments
 
