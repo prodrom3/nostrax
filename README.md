@@ -115,19 +115,53 @@ No telemetry is collected. The process makes no network calls to third parties b
 
 ## Installation
 
-Install from source:
+nostrax is not yet published to PyPI, so `pip install nostrax` and `pipx install nostrax` will not resolve. Install from source or directly from the Git repository using either `pip` (library or CLI) or `pipx` (isolated CLI).
+
+### With pipx (recommended for CLI use)
+
+`pipx` installs the `nostrax` command into an isolated virtual environment and puts it on your PATH, without polluting your system or project Python.
+
+```bash
+# from a local clone
+git clone https://github.com/prodrom3/nostrax.git
+cd nostrax
+pipx install .
+
+# or directly from GitHub
+pipx install git+https://github.com/prodrom3/nostrax.git
+
+# with the progress bar extra
+pipx install "git+https://github.com/prodrom3/nostrax.git#egg=nostrax[progress]"
+
+# upgrade later
+pipx upgrade nostrax
+
+# uninstall
+pipx uninstall nostrax
+```
+
+### With pip (for embedding as a library)
 
 ```bash
 git clone https://github.com/prodrom3/nostrax.git
 cd nostrax
-pip install .
+pip install .                        # library + CLI
+pip install ".[progress]"            # with progress bar support
+pip install -e ".[dev]"              # editable, with test tooling
 ```
 
-With optional dependencies:
+Or directly from GitHub:
 
 ```bash
-pip install "nostrax[progress]"      # Progress bar support
-pip install -e ".[dev]"              # Development and testing
+pip install "git+https://github.com/prodrom3/nostrax.git"
+pip install "git+https://github.com/prodrom3/nostrax.git@v2.0.0"   # pin to a tag
+```
+
+### Verify the install
+
+```bash
+nostrax --version
+nostrax --check-update
 ```
 
 Requires Python 3.10 or newer.
