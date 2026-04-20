@@ -392,7 +392,12 @@ async def crawl_async(
 
                 if robots and not robots.is_allowed(current_url):
                     logger.info("Blocked by robots.txt: %s", current_url)
-                    metrics.on_robots_blocked(current_url)
+                    try:
+                        metrics.on_robots_blocked(current_url)
+                    except Exception as e:
+                        logger.warning(
+                            "metrics sink raised in on_robots_blocked: %s", e
+                        )
                     return
 
                 await rate_limiter.wait(urlparse(current_url).netloc)
@@ -409,7 +414,12 @@ async def crawl_async(
                 )
 
                 if html is None:
-                    metrics.on_fetch_failed(current_url, current_depth)
+                    try:
+                        metrics.on_fetch_failed(current_url, current_depth)
+                    except Exception as e:
+                        logger.warning(
+                            "metrics sink raised in on_fetch_failed: %s", e
+                        )
                     return
 
                 found = await loop.run_in_executor(
@@ -432,9 +442,14 @@ async def crawl_async(
                 pages_crawled += 1
                 if progress_callback is not None:
                     progress_callback(pages_crawled, len(all_results))
-                metrics.on_page_fetched(
-                    current_url, current_depth, resp_time, len(found)
-                )
+                try:
+                    metrics.on_page_fetched(
+                        current_url, current_depth, resp_time, len(found)
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "metrics sink raised in on_page_fetched: %s", e
+                    )
 
                 if len(all_results) >= max_urls:
                     logger.warning(
