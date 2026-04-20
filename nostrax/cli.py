@@ -395,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_concurrent=args.max_concurrent,
                 user_agent=args.user_agent,
                 auth=__import__("aiohttp").BasicAuth(auth[0], auth[1]) if auth else None,
+                proxy=args.proxy,
             )
         )
 

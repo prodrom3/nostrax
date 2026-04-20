@@ -5,6 +5,7 @@ import socket
 import pytest
 
 from nostrax.validation import (
+    redact_credentials,
     validate_header_value,
     validate_positive_int,
     validate_proxy_url,
@@ -149,3 +150,21 @@ def test_header_value_rejects_newline():
 def test_header_value_rejects_too_long():
     err = validate_header_value("x" * 501, "User-Agent")
     assert err is not None
+
+
+def test_redact_credentials_masks_userinfo():
+    assert redact_credentials("http://user:pass@proxy:8080") == "http://***@proxy:8080"
+    assert redact_credentials("socks5://u:p@proxy:1080/path") == "socks5://***@proxy:1080/path"
+
+
+def test_redact_credentials_masks_user_only():
+    assert redact_credentials("http://user@proxy:8080") == "http://***@proxy:8080"
+
+
+def test_redact_credentials_passthrough_without_userinfo():
+    assert redact_credentials("http://proxy:8080") == "http://proxy:8080"
+
+
+def test_redact_credentials_handles_empty():
+    assert redact_credentials(None) == ""
+    assert redact_credentials("") == ""

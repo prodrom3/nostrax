@@ -70,6 +70,21 @@ async def test_fetch_page_failure():
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_forwards_proxy_to_session():
+    mock_resp = _make_mock_response("<html>OK</html>")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    await fetch_page(
+        mock_session, "https://example.com", proxy="http://proxy:8080"
+    )
+
+    _, kwargs = mock_session.get.call_args
+    assert kwargs["proxy"] == "http://proxy:8080"
+    assert kwargs["allow_redirects"] is False
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_uses_full_jitter_backoff(monkeypatch):
     """Retry delays are drawn from random.uniform(0, 2**attempt), not 2**attempt flat."""
     import aiohttp

@@ -7,9 +7,31 @@ Licensed under the MIT License.
 import ipaddress
 import logging
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
+
+
+def redact_credentials(url: str | None) -> str:
+    """Return a copy of ``url`` with any userinfo replaced by ``***``.
+
+    Intended for any code path that logs or surfaces a URL that may
+    contain credentials (proxies, authenticated targets). Returns the
+    input unchanged when there is no userinfo, and an empty string when
+    ``url`` is falsy.
+    """
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if not parsed.username and not parsed.password:
+        return url
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    netloc = f"***@{host}" if host else "***"
+    return urlunparse(
+        (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+    )
 
 _UnsafeIP = ipaddress.IPv4Address | ipaddress.IPv6Address
 

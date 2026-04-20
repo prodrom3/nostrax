@@ -35,6 +35,7 @@ async def fetch_sitemap(
     url: str,
     *,
     timeout: int = 10,
+    proxy: str | None = None,
     _depth: int = 0,
     _visited: set[str] | None = None,
 ) -> list[str]:
@@ -62,6 +63,7 @@ async def fetch_sitemap(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
             allow_redirects=False,
+            proxy=proxy,
         ) as response:
             if response.status != 200:
                 logger.warning("Sitemap not found at %s (status %d)", url, response.status)
@@ -91,6 +93,7 @@ async def fetch_sitemap(
                 child_urls = await fetch_sitemap(
                     session, loc.text.strip(),
                     timeout=timeout,
+                    proxy=proxy,
                     _depth=_depth + 1,
                     _visited=_visited,
                 )

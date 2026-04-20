@@ -22,6 +22,7 @@ from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
 from nostrax.robots import RobotsChecker
 from nostrax.sitemap import fetch_sitemap
+from nostrax.validation import redact_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def fetch_page(
     timeout: int = DEFAULT_TIMEOUT,
     max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     retries: int = DEFAULT_RETRIES,
+    proxy: str | None = None,
 ) -> tuple[str | None, float]:
     """Fetch a web page and return (html, response_time_ms).
 
@@ -58,6 +60,7 @@ async def fetch_page(
                 url,
                 timeout=aiohttp.ClientTimeout(total=timeout),
                 allow_redirects=False,
+                proxy=proxy,
             ) as response:
                 elapsed = (time.monotonic() - start) * 1000
 
@@ -189,20 +192,25 @@ async def crawl_async(
     )
     headers = {"User-Agent": user_agent}
 
+    if proxy:
+        logger.debug("Using proxy %s for all outbound fetches", redact_credentials(proxy))
+
     async with aiohttp.ClientSession(
         connector=connector,
         headers=headers,
         auth=basic_auth,
     ) as session:
         if robots:
-            await robots.load(session, url, timeout=timeout)
+            await robots.load(session, url, timeout=timeout, proxy=proxy)
 
         # Optionally fetch sitemap.xml
         if use_sitemap:
             sitemap_url = urljoin(
                 f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
             )
-            sitemap_urls = await fetch_sitemap(session, sitemap_url, timeout=timeout)
+            sitemap_urls = await fetch_sitemap(
+                session, sitemap_url, timeout=timeout, proxy=proxy
+            )
             for su in sitemap_urls:
                 all_results.append(
                     UrlResult(url=su, source="sitemap.xml", tag="sitemap", depth=0)
@@ -248,6 +256,7 @@ async def crawl_async(
                         timeout=timeout,
                         max_response_size=max_response_size,
                         retries=retries,
+                        proxy=proxy,
                     )
 
                 if html is None:
@@ -309,6 +318,7 @@ async def crawl_async(
                         timeout=timeout,
                         max_response_size=max_response_size,
                         retries=retries,
+                        proxy=proxy,
                     )
 
                 if html is None:

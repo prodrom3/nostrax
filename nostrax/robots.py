@@ -29,6 +29,7 @@ class RobotsChecker:
         url: str,
         *,
         timeout: int = 10,
+        proxy: str | None = None,
     ) -> None:
         """Fetch and parse the robots.txt for the given URL's domain."""
         parsed = urlparse(url)
@@ -39,6 +40,7 @@ class RobotsChecker:
                 robots_url,
                 timeout=aiohttp.ClientTimeout(total=timeout),
                 allow_redirects=False,
+                proxy=proxy,
             ) as response:
                 if response.status != 200:
                     logger.info(
