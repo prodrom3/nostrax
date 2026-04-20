@@ -70,10 +70,11 @@ def validate_target_url(url: str) -> str | None:
     the common SSRF hole where a name like ``evil.com`` resolves to an
     internal IP at fetch time.
 
-    A residual TOCTOU window remains between this validation and the
-    actual fetch, because aiohttp re-resolves DNS itself. Closing that
-    window requires a connector-level resolver that re-validates every
-    resolution at request time; tracked as a follow-up.
+    This check runs at CLI entry; aiohttp still re-resolves DNS at
+    connection time, so the crawler additionally installs
+    :class:`nostrax.resolver.SafeResolver` on its TCPConnector to
+    re-apply the same classifier at every resolution, closing the TTL=0
+    DNS rebinding window between validation and fetch.
 
     Returns an error message string, or None if valid.
     """

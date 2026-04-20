@@ -20,6 +20,7 @@ from nostrax.exceptions import FetchError
 from nostrax.extractor import extract_urls
 from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
+from nostrax.resolver import SafeResolver
 from nostrax.robots import RobotsChecker
 from nostrax.sitemap import fetch_sitemap
 from nostrax.validation import redact_credentials
@@ -216,6 +217,7 @@ async def crawl_async(
         limit_per_host=max_concurrent,
         ttl_dns_cache=DEFAULT_DNS_CACHE_TTL,
         use_dns_cache=True,
+        resolver=SafeResolver(),
     )
     headers = {"User-Agent": user_agent}
 

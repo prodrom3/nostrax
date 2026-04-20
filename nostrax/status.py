@@ -9,6 +9,8 @@ import logging
 
 import aiohttp
 
+from nostrax.resolver import SafeResolver
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +60,9 @@ async def check_statuses(
     semaphore = asyncio.Semaphore(max_concurrent)
     results: dict[str, int | None] = {}
 
-    connector = aiohttp.TCPConnector(limit=max_concurrent)
+    connector = aiohttp.TCPConnector(
+        limit=max_concurrent, resolver=SafeResolver()
+    )
     headers = {"User-Agent": user_agent}
 
     async with aiohttp.ClientSession(
