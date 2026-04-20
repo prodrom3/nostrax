@@ -65,36 +65,41 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 ### Crawling Engine
 
 - **Async I/O** via `aiohttp` with shared session, connection pooling, and DNS caching
-- **DFS and BFS** traversal strategies
-- **Exponential backoff retry** for transient network failures
+- **Unified DFS / BFS engine** sharing a bounded frontier and a worker pool, so `--strategy bfs` runs at the same concurrency as `--strategy dfs`
+- **Full-jitter retry** for transient network failures, avoiding lockstep retry storms
+- **Separated timeouts**: total, connect, and per-read budgets can be set independently
 - **Content-Type aware** - skips non-HTML responses before downloading
-- **Response size limits** prevent memory exhaustion (default 10 MB)
-- **Rate limiting** with configurable per-request delay
-- **robots.txt support** with standards-compliant URL matching
+- **Response size limits** prevent memory exhaustion (default 10 MB for pages, 1 MiB for robots.txt, 50 MiB for sitemaps)
+- **Per-host rate limiting**: `--rate-limit` applies to each netloc independently, not globally
+- **robots.txt support** with standards-compliant URL matching and redirects disabled
 - **Scope control** to restrict crawling to a URL path prefix
-- **Resume from disk** via on-disk cache of visited URLs and results
+- **Resume from disk** via on-disk cache with atomic rewrites of the visited set and a kept-open append handle for results
+- **Graceful shutdown**: `SIGINT` (Ctrl+C) flushes the cache before exiting with code 130
 
 ### Extraction
 
-- URL extraction from `<a>`, `<img>`, `<script>`, `<link>`, `<form>`, `<iframe>`, `<video>`, `<audio>`, and `<source>` tags
+- URL extraction from `<a>`, `<img>`, `<script>`, `<link>`, `<form>`, `<iframe>`, `<video>`, `<audio>`, `<source>`, and `<meta http-equiv="refresh">` tags
+- **`<img srcset>` and `<source srcset>`** are fully unpacked (every candidate URL is emitted)
+- **`<base href>` is honoured** when resolving relative URLs on the page
 - **lxml C-based parser** with `SoupStrainer` for targeted parsing
 - **URL normalization** - strips fragments, trailing slashes, sorts query params, lowercases host
 - **Credential stripping** prevents leaking userinfo in output
-- **Sitemap.xml parsing** with sitemap index support and XXE protection
+- **Sitemap.xml parsing** with sitemap index support, through `defusedxml` to refuse XML-bomb / external-DTD payloads at parse time
 
 ### Filtering and Output
 
 - Filter by domain (internal / external / all), protocol, regex include, regex exclude
+- `--pattern` / `--exclude` regexes run through the `regex` package with a per-URL timeout, bounding worst-case ReDoS exposure
 - Output formats: plain, JSON, CSV, self-contained HTML report
-- Rich metadata per URL: source page, tag type, depth, response time
+- Rich metadata per URL: source page, tag type, depth, response time, status
 - Deduplication and sorting
 - File output with path traversal protection
 
 ### Operations
 
 - HTTP basic authentication
-- HTTP, HTTPS, SOCKS4, SOCKS5 proxy support
-- **Broken link checker** via concurrent HEAD requests
+- HTTP, HTTPS, SOCKS4, SOCKS5 proxy support, **credentials redacted from logs**
+- **Broken link checker** via concurrent HEAD requests on the same aiohttp session the crawl used (one DNS/TLS handshake per host, not two)
 - **Progress bar** via optional `tqdm` dependency
 - **Config file** via `.nostraxrc` (TOML format)
 - **PyPI version check** via `--check-update`
@@ -341,7 +346,59 @@ from nostrax import crawl, NostraxError
 try:
     urls = crawl("https://example.com")
 except NostraxError as e:
+    # Raised when the starting URL could not be fetched
+    # (network error, robots block, content-type mismatch, etc.)
     print(f"Crawl failed: {e}")
+```
+
+### Observability hooks
+
+`crawl` and `crawl_async` accept a `metrics=` argument implementing the
+`MetricsSink` Protocol. Pair this with your Prometheus / OpenTelemetry
+/ Datadog client to stream crawl events:
+
+```python
+from nostrax import crawl
+from nostrax.metrics import MetricsSink
+
+
+class PrometheusSink:
+    def on_page_fetched(self, url, depth, elapsed_ms, urls_found):
+        PAGES_FETCHED.inc()
+        FETCH_LATENCY_MS.observe(elapsed_ms)
+
+    def on_fetch_failed(self, url, depth):
+        PAGES_FAILED.inc()
+
+    def on_robots_blocked(self, url):
+        ROBOTS_BLOCKED.inc()
+
+
+crawl("https://example.com", depth=2, metrics=PrometheusSink())
+```
+
+Sink methods are called synchronously on the event-loop thread, so
+implementations must be cheap. Exceptions raised by a sink are
+isolated: they are logged as warnings and do not abort the crawl.
+
+### Pluggable fetcher and extractor
+
+For Playwright-rendered pages, custom authentication flows, or a
+caching fetcher, pass any callable that matches the `Fetcher` or
+`Extractor` Protocol:
+
+```python
+from nostrax import crawl
+from nostrax.protocols import Fetcher
+
+
+async def playwright_fetcher(session, url, *, timeout, max_response_size,
+                              retries, proxy, connect_timeout, read_timeout):
+    # Render JS, return (html, elapsed_ms) or (None, elapsed_ms) on failure
+    ...
+
+
+urls = crawl("https://example.com", fetcher=playwright_fetcher)
 ```
 
 ## CLI Reference
@@ -351,7 +408,8 @@ usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
                [--all-tags] [--tags TAGS] [--domain {all,internal,external}]
                [--protocol PROTOCOL] [--pattern PATTERN] [--exclude EXCLUDE]
                [--sort] [-f {plain,json,csv,html}] [-o OUTPUT]
-               [--timeout TIMEOUT] [--user-agent USER_AGENT] [-v] [--no-dedup]
+               [--timeout TIMEOUT] [--connect-timeout SECS] [--read-timeout SECS]
+               [--user-agent USER_AGENT] [-v] [--no-dedup]
                [--max-concurrent N] [--respect-robots] [--max-urls N]
                [--rate-limit SECS] [--proxy URL] [--auth USER:PASS]
                [--sitemap] [--check-status] [--metadata] [--progress]
@@ -377,14 +435,16 @@ usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
 | `--sort` | Sort URLs alphabetically |
 | `-f, --format` | Output format: `plain`, `json`, `csv`, or `html` |
 | `-o, --output` | Write output to file instead of stdout |
-| `--timeout` | Request timeout in seconds (default: 10) |
+| `--timeout` | Total request timeout in seconds (default: 10) |
+| `--connect-timeout` | Per-connection timeout in seconds (defaults to `--timeout`) |
+| `--read-timeout` | Per-socket-read timeout in seconds (defaults to `--timeout`) |
 | `--user-agent` | Custom User-Agent string |
 | `-v, --verbose` | Enable verbose logging |
 | `--no-dedup` | Keep duplicate URLs |
 | `--max-concurrent` | Max concurrent HTTP requests (default: 10) |
 | `--respect-robots` | Check robots.txt before crawling |
 | `--max-urls` | Stop crawling after this many URLs (default: 50000) |
-| `--rate-limit` | Minimum seconds between requests (default: 0) |
+| `--rate-limit` | Minimum seconds between requests **per host** (default: 0) |
 | `--proxy` | Proxy URL (`http`, `https`, `socks4`, `socks5`) |
 | `--auth` | HTTP basic auth as `user:password` |
 | `--sitemap` | Also parse `sitemap.xml` for additional URLs |
