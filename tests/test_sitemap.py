@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nostrax.sitemap import fetch_sitemap, _safe_parse_xml
+from nostrax.sitemap import MAX_SITEMAP_SIZE, fetch_sitemap, _safe_parse_xml
 
 
 SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -32,6 +32,9 @@ def _make_mock_response(text, status=200):
     mock_resp = AsyncMock()
     mock_resp.status = status
     mock_resp.text = AsyncMock(return_value=text)
+    mock_content = MagicMock()
+    mock_content.read = AsyncMock(return_value=text.encode("utf-8"))
+    mock_resp.content = mock_content
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_resp.__aexit__ = AsyncMock(return_value=False)
     return mock_resp
@@ -119,6 +122,25 @@ async def test_fetch_sitemap_circular_reference():
 
     urls = await fetch_sitemap(mock_session, "https://example.com/sitemap.xml")
     assert urls == []  # Circular ref detected, no URLs extracted
+
+
+@pytest.mark.asyncio
+async def test_fetch_sitemap_rejects_oversized_body():
+    """An oversized sitemap body should be dropped, not parsed."""
+    oversized_bytes = b"<?xml version='1.0'?><urlset/>" + b"x" * (MAX_SITEMAP_SIZE + 1)
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_content = MagicMock()
+    mock_content.read = AsyncMock(return_value=oversized_bytes)
+    mock_resp.content = mock_content
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    urls = await fetch_sitemap(mock_session, "https://example.com/sitemap.xml")
+    assert urls == []
 
 
 @pytest.mark.asyncio

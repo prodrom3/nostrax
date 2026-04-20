@@ -2,7 +2,6 @@
 
 Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
-Last updated: 2026-04-02
 """
 
 import logging
@@ -14,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 SITEMAP_NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 MAX_SITEMAP_DEPTH = 5
+# sitemaps.org caps uncompressed sitemaps at 50 MiB; match that.
+MAX_SITEMAP_SIZE = 50 * 1024 * 1024
 
 
 def _safe_parse_xml(text: str) -> ElementTree.Element | None:
@@ -60,11 +61,19 @@ async def fetch_sitemap(
         async with session.get(
             url,
             timeout=aiohttp.ClientTimeout(total=timeout),
+            allow_redirects=False,
         ) as response:
             if response.status != 200:
                 logger.warning("Sitemap not found at %s (status %d)", url, response.status)
                 return []
-            text = await response.text()
+            body = await response.content.read(MAX_SITEMAP_SIZE + 1)
+            if len(body) > MAX_SITEMAP_SIZE:
+                logger.warning(
+                    "Sitemap %s exceeds %d bytes, skipping",
+                    url, MAX_SITEMAP_SIZE,
+                )
+                return []
+            text = body.decode("utf-8", errors="replace")
     except (aiohttp.ClientError, TimeoutError) as e:
         logger.error("Failed to fetch sitemap %s: %s", url, e)
         return []
