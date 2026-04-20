@@ -9,7 +9,6 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from collections import deque
 from functools import partial
 from urllib.parse import urlparse, urljoin
 
@@ -343,142 +342,120 @@ async def crawl_async(
                 normalized = normalize_url(link)
                 return normalized not in visited
 
-            if strategy == "bfs":
-                # Breadth-first crawling
-                queue: deque[tuple[str, int]] = deque()
-                queue.append((url, 0))
+            # Unified engine: a frontier queue + max_concurrent workers.
+            # DFS uses LifoQueue (last-in first-out = deepen first); BFS
+            # uses FIFO Queue. Workers pull, fetch, enqueue children, and
+            # mark task_done() so frontier.join() can detect completion.
+            # max_concurrent workers replace the old per-request
+            # Semaphore: having exactly N workers gives the same bound
+            # without the extra primitive.
+            frontier: asyncio.Queue[tuple[str, int]] = (
+                asyncio.LifoQueue() if strategy == "dfs" else asyncio.Queue()
+            )
+            await frontier.put((url, 0))
 
-                while queue and len(all_results) < max_urls:
-                    current_url, current_depth = queue.popleft()
+            async def _process_one(current_url: str, current_depth: int) -> None:
+                nonlocal pages_crawled
 
-                    normalized = normalize_url(current_url)
-                    if normalized in visited:
-                        continue
-                    visited.add(normalized)
+                normalized = normalize_url(current_url)
+                if normalized in visited:
+                    return
+                visited.add(normalized)
 
-                    if cache:
-                        cache.mark_visited(normalized)
+                if cache:
+                    cache.mark_visited(normalized)
 
-                    if robots and not robots.is_allowed(current_url):
-                        logger.info("Blocked by robots.txt: %s", current_url)
-                        continue
+                if len(all_results) >= max_urls:
+                    return
 
-                    await rate_limiter.wait(urlparse(current_url).netloc)
+                if robots and not robots.is_allowed(current_url):
+                    logger.info("Blocked by robots.txt: %s", current_url)
+                    return
 
-                    async with semaphore:
-                        logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
-                        html, resp_time = await fetch_page(
-                            session, current_url,
-                            timeout=timeout,
-                            max_response_size=max_response_size,
-                            retries=retries,
-                            proxy=proxy,
-                            connect_timeout=connect_timeout,
-                            read_timeout=read_timeout,
-                        )
+                await rate_limiter.wait(urlparse(current_url).netloc)
 
-                    if html is None:
-                        continue
+                logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
+                html, resp_time = await fetch_page(
+                    session, current_url,
+                    timeout=timeout,
+                    max_response_size=max_response_size,
+                    retries=retries,
+                    proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
+                )
 
-                    found = await loop.run_in_executor(
-                        None,
-                        partial(
-                            extract_urls, html, current_url,
-                            tags=tags, deduplicate=False,
-                            include_metadata=True, depth=current_depth,
-                        ),
-                    )
+                if html is None:
+                    return
 
+                found = await loop.run_in_executor(
+                    None,
+                    partial(
+                        extract_urls, html, current_url,
+                        tags=tags, deduplicate=False,
+                        include_metadata=True, depth=current_depth,
+                    ),
+                )
+
+                for r in found:
+                    r.response_time = resp_time
+                all_results.extend(found)
+
+                if cache:
                     for r in found:
-                        r.response_time = resp_time
-                    all_results.extend(found)
+                        cache.save_result(r)
 
-                    if cache:
-                        for r in found:
-                            cache.save_result(r)
+                pages_crawled += 1
+                if progress_callback is not None:
+                    progress_callback(pages_crawled, len(all_results))
 
-                    pages_crawled += 1
-                    if progress_callback is not None:
-                        progress_callback(pages_crawled, len(all_results))
-
-                    if current_depth < depth:
-                        for result in found:
-                            if _should_follow(result.url):
-                                queue.append((result.url, current_depth + 1))
-
-            else:
-                # Depth-first crawling (default)
-                async def _crawl_page(current_url: str, current_depth: int) -> None:
-                    nonlocal pages_crawled
-
-                    normalized = normalize_url(current_url)
-                    if normalized in visited:
-                        return
-                    visited.add(normalized)
-
-                    if cache:
-                        cache.mark_visited(normalized)
-
-                    if len(all_results) >= max_urls:
-                        return
-
-                    if robots and not robots.is_allowed(current_url):
-                        logger.info("Blocked by robots.txt: %s", current_url)
-                        return
-
-                    await rate_limiter.wait(urlparse(current_url).netloc)
-
-                    async with semaphore:
-                        logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
-                        html, resp_time = await fetch_page(
-                            session, current_url,
-                            timeout=timeout,
-                            max_response_size=max_response_size,
-                            retries=retries,
-                            proxy=proxy,
-                            connect_timeout=connect_timeout,
-                            read_timeout=read_timeout,
-                        )
-
-                    if html is None:
-                        return
-
-                    found = await loop.run_in_executor(
-                        None,
-                        partial(
-                            extract_urls, html, current_url,
-                            tags=tags, deduplicate=False,
-                            include_metadata=True, depth=current_depth,
-                        ),
+                if len(all_results) >= max_urls:
+                    logger.warning(
+                        "Reached max URL limit (%d), stopping crawl.", max_urls
                     )
+                    return
 
-                    for r in found:
-                        r.response_time = resp_time
-                    all_results.extend(found)
+                if current_depth < depth:
+                    for result in found:
+                        if _should_follow(result.url):
+                            await frontier.put((result.url, current_depth + 1))
 
-                    if cache:
-                        for r in found:
-                            cache.save_result(r)
+            # Capture the first exception raised inside any worker so it
+            # propagates out of crawl_async after frontier.join() completes.
+            # fetch_page already swallows ClientError / TimeoutError, so
+            # anything that escapes _process_one is either a real bug or a
+            # caller-visible failure (Boom from a test, KeyboardInterrupt
+            # surfaced as a regular Exception, etc.) and must not be lost.
+            first_error: list[BaseException | None] = [None]
 
-                    pages_crawled += 1
-                    if progress_callback is not None:
-                        progress_callback(pages_crawled, len(all_results))
-
-                    if len(all_results) >= max_urls:
-                        logger.warning(
-                            "Reached max URL limit (%d), stopping crawl.", max_urls
+            async def _worker() -> None:
+                while True:
+                    current_url, current_depth = await frontier.get()
+                    try:
+                        if first_error[0] is not None:
+                            continue
+                        await _process_one(current_url, current_depth)
+                    except Exception as e:
+                        logger.error(
+                            "Worker failed on %s: %s", current_url, e, exc_info=True
                         )
-                        return
+                        if first_error[0] is None:
+                            first_error[0] = e
+                    finally:
+                        frontier.task_done()
 
-                    if current_depth < depth:
-                        tasks = []
-                        for result in found:
-                            if _should_follow(result.url):
-                                tasks.append(_crawl_page(result.url, current_depth + 1))
-                        if tasks:
-                            await asyncio.gather(*tasks)
+            workers = [
+                asyncio.create_task(_worker()) for _ in range(max_concurrent)
+            ]
+            try:
+                await frontier.join()
+            finally:
+                for w in workers:
+                    w.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
 
-                await _crawl_page(url, 0)
+            if first_error[0] is not None:
+                raise first_error[0]
 
             if check_status and all_results:
                 await _attach_statuses(
