@@ -5,12 +5,27 @@ from unittest.mock import patch
 from nostrax.updater import check_update, get_latest_version, parse_version
 
 
-def test_parse_version():
-    assert parse_version("1.0.0") == (1, 0, 0)
-    assert parse_version("2.10.3") == (2, 10, 3)
+def test_parse_version_orders_releases():
     assert parse_version("0.1.0") < parse_version("1.0.0")
     assert parse_version("1.0.0") == parse_version("1.0.0")
     assert parse_version("1.0.1") > parse_version("1.0.0")
+    assert parse_version("2.10.3") > parse_version("2.9.9")
+
+
+def test_parse_version_handles_pep440_prereleases():
+    """parse_version must accept PEP 440 pre/dev/local versions without
+    raising, and order them correctly relative to finals."""
+    assert parse_version("2.0.0rc1") < parse_version("2.0.0")
+    assert parse_version("2.0.0.dev1") < parse_version("2.0.0rc1")
+    assert parse_version("2.0.0+local") > parse_version("2.0.0")
+
+
+def test_parse_version_rejects_garbage():
+    import pytest
+    from packaging.version import InvalidVersion
+
+    with pytest.raises(InvalidVersion):
+        parse_version("not-a-version")
 
 
 @patch("nostrax.updater.urlopen")

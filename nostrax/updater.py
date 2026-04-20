@@ -2,13 +2,14 @@
 
 Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
-Last updated: 2026-04-02
 """
 
 import json
 import logging
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+from packaging.version import InvalidVersion, Version
 
 from nostrax import __version__
 
@@ -18,9 +19,15 @@ PYPI_URL = "https://pypi.org/pypi/nostrax/json"
 TIMEOUT = 5
 
 
-def parse_version(version: str) -> tuple[int, ...]:
-    """Parse a semver string into a comparable tuple."""
-    return tuple(int(x) for x in version.split("."))
+def parse_version(version: str) -> Version:
+    """Parse a PEP 440 version string for comparison.
+
+    Returns a ``packaging.version.Version`` that supports full PEP 440
+    ordering, including pre-releases, post-releases, dev builds, and
+    local version identifiers. Raises ``InvalidVersion`` on malformed
+    input.
+    """
+    return Version(version)
 
 
 def get_latest_version() -> str | None:
@@ -54,7 +61,7 @@ def check_update() -> str:
     try:
         current = parse_version(__version__)
         remote = parse_version(latest)
-    except ValueError:
+    except InvalidVersion:
         return (
             f"nostrax {__version__} (installed)\n"
             f"Could not parse version: {latest}"
