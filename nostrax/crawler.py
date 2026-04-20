@@ -360,8 +360,19 @@ async def crawl_async(
             # max_concurrent workers replace the old per-request
             # Semaphore: having exactly N workers gives the same bound
             # without the extra primitive.
+            #
+            # The frontier is bounded at ``max_urls * 2``. _process_one
+            # refuses to enqueue children once all_results hits
+            # ``max_urls``, so this cap is a backstop against pathological
+            # fan-out (e.g., a single page linking to 10^6 URLs would
+            # otherwise balloon memory before we noticed). Workers block
+            # on ``put()`` when the queue is full, which acts as natural
+            # backpressure.
+            frontier_max = max(max_urls * 2, max_concurrent * 2)
             frontier: asyncio.Queue[tuple[str, int]] = (
-                asyncio.LifoQueue() if strategy == "dfs" else asyncio.Queue()
+                asyncio.LifoQueue(maxsize=frontier_max)
+                if strategy == "dfs"
+                else asyncio.Queue(maxsize=frontier_max)
             )
             await frontier.put((url, 0))
 
