@@ -502,8 +502,8 @@ nostrax is hardened by default against common attack vectors in crawler and scra
 
 | Control | Mitigation |
 |---|---|
-| **SSRF prevention** | Target URL validation rejects `file://`, private IPs (RFC 1918), loopback, link-local, and cloud metadata endpoints (169.254.169.254) |
-| **XXE prevention** | Sitemap parser rejects XML containing `<!DOCTYPE>` or `<!ENTITY>` declarations |
+| **SSRF prevention** | Target URL validation rejects `file://`, private IPs (RFC 1918), loopback, link-local, multicast, reserved, unspecified, IPv4-mapped IPv6 variants of the above, and cloud metadata endpoints (169.254.169.254). Domain-name targets are resolved via `socket.getaddrinfo` and every returned address is run through the same unsafe-IP classifier so a hostname whose A record points into the internal network is also rejected. A residual TOCTOU window between validation and fetch is tracked as a follow-up. |
+| **XXE prevention** | Sitemap XML is parsed through `defusedxml`, which refuses `<!DOCTYPE>`, `<!ENTITY>`, external DTDs, and classic billion-laughs / entity-expansion payloads at parse time. A redundant string-level DOCTYPE/ENTITY rejection is kept as belt-and-suspenders in case the library is ever swapped or downgraded. |
 | **Sitemap loop protection** | Max recursion depth of 5 with cycle detection on sitemap indexes |
 | **Path traversal prevention** | Cache and output file paths are restricted to the working directory |
 | **Header injection prevention** | `User-Agent` values are validated for CR/LF and length bounds |
@@ -515,7 +515,7 @@ nostrax is hardened by default against common attack vectors in crawler and scra
 
 ### Supply chain
 
-- All runtime dependencies are published, pinned-by-floor packages (`aiohttp`, `beautifulsoup4`, `lxml`).
+- All runtime dependencies are published, pinned-by-floor packages: `aiohttp`, `beautifulsoup4`, `defusedxml`, `lxml`, `packaging`, plus `tomli` on Python 3.10 (stdlib `tomllib` on 3.11+).
 - No runtime code execution of scraped content - HTML is parsed, never rendered in a JavaScript engine.
 - No outbound telemetry. The only optional outbound call outside of targets is `--check-update`, which queries PyPI on explicit user request.
 
