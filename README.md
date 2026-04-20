@@ -508,7 +508,7 @@ nostrax is hardened by default against common attack vectors in crawler and scra
 | **Path traversal prevention** | Cache and output file paths are restricted to the working directory |
 | **Header injection prevention** | `User-Agent` values are validated for CR/LF and length bounds |
 | **Open redirect prevention** | HTTP redirect following is disabled on all fetches |
-| **ReDoS mitigation** | User-supplied regex patterns are validated and catastrophic backtracking is caught |
+| **Regex input validation** | User-supplied `--pattern` and `--exclude` regexes are compile-checked via `re.compile` and rejected on syntax error. A time-bounded matcher guarding against catastrophic backtracking is not yet shipped; on CPython 3.14+ the stdlib re engine no longer raises `RecursionError` on ReDoS-class patterns, so a real mitigation requires either a signal-based timeout or the `regex` package. Tracked as a follow-up. |
 | **Response size limits** | Default 10 MB per-response cap prevents memory exhaustion |
 | **Credential scrubbing** | `userinfo` (`user:pass@`) components are stripped during URL normalization |
 | **Content-Type gating** | Non-HTML responses are skipped before download where possible |
