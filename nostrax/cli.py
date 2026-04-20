@@ -355,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
                 scope=args.scope,
                 strategy=args.strategy,
                 cache_dir=args.cache_dir,
+                check_status=args.check_status,
             )
         )
     except NostraxError as e:
@@ -395,28 +396,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             url_list.sort()
 
-    # Check HTTP status codes
-    statuses = None
-    if args.check_status:
-        from nostrax.status import check_statuses
-
-        final_urls = [r.url for r in results] if need_metadata else url_list
-
-        if not args.silent:
-            sys.stderr.write(f"Checking status of {len(final_urls)} URLs...\n")
-
-        statuses = asyncio.run(
-            check_statuses(
-                final_urls,
-                timeout=args.timeout,
-                connect_timeout=args.connect_timeout,
-                read_timeout=args.read_timeout,
-                max_concurrent=args.max_concurrent,
-                user_agent=args.user_agent,
-                auth=__import__("aiohttp").BasicAuth(auth[0], auth[1]) if auth else None,
-                proxy=args.proxy,
-            )
-        )
+    # Status codes are attached by crawl_async (check_status=True) on the
+    # same aiohttp session used for the crawl, so we just read them back
+    # off the UrlResult objects here.
+    statuses: dict[str, int | None] | None = None
+    if args.check_status and need_metadata:
+        statuses = {r.url: r.status for r in results}
 
     # Output
     if not args.silent:

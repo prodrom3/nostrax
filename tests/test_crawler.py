@@ -226,6 +226,37 @@ def test_crawl_deduplicates():
         assert urls.count("https://example.com/same") == 1
 
 
+def test_crawl_check_status_requires_metadata():
+    import pytest
+
+    with pytest.raises(ValueError, match="include_metadata"):
+        crawl("https://example.com", check_status=True, include_metadata=False)
+
+
+def test_crawl_check_status_attaches_status_from_same_session():
+    """check_status=True should reuse the crawl's session for HEAD probes
+    and attach each status to the UrlResult without a second session."""
+    with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(return_value=_make_mock_response(SAMPLE_HTML))
+        mock_session.head = MagicMock(
+            return_value=_make_mock_response("", status=204)
+        )
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        results = crawl(
+            "https://example.com",
+            include_metadata=True,
+            check_status=True,
+        )
+        assert results, "expected some results"
+        assert all(r.status == 204 for r in results)
+        # Sanity: ClientSession was constructed exactly once (not a second
+        # time for status probing).
+        assert mock_cls.call_count == 1
+
+
 def test_crawl_raises_fetch_error_when_start_unreachable():
     import aiohttp as aio
 

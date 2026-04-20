@@ -136,6 +136,38 @@ async def fetch_page(
     return None, 0
 
 
+async def _attach_statuses(
+    session: aiohttp.ClientSession,
+    results: list[UrlResult],
+    semaphore: asyncio.Semaphore,
+    *,
+    timeout: int,
+    proxy: str | None,
+    connect_timeout: float | None,
+    read_timeout: float | None,
+) -> None:
+    """HEAD every discovered URL on the same session and attach r.status.
+
+    Runs as a post-crawl phase so the HEAD probes reuse the session, its
+    DNS cache, its SafeResolver, and its connection pool. Bounded by the
+    same semaphore the crawl used, so we do not burst past the target's
+    concurrency budget.
+    """
+    from nostrax.status import check_url_status
+
+    async def _probe(r: UrlResult) -> None:
+        async with semaphore:
+            r.status = await check_url_status(
+                session, r.url,
+                timeout=timeout,
+                proxy=proxy,
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+            )
+
+    await asyncio.gather(*(_probe(r) for r in results))
+
+
 async def crawl_async(
     url: str,
     *,
@@ -160,6 +192,7 @@ async def crawl_async(
     scope: str | None = None,
     strategy: str = "dfs",
     cache_dir: str | None = None,
+    check_status: bool = False,
 ) -> list[str] | list[UrlResult]:
     """Crawl a URL and optionally follow links concurrently.
 
@@ -184,10 +217,17 @@ async def crawl_async(
         scope: URL path prefix to restrict crawling to (e.g. "/docs/").
         strategy: Crawl strategy - "dfs" (depth-first) or "bfs" (breadth-first).
         cache_dir: Directory to cache crawl state for resume support.
+        check_status: When True, HEAD every discovered URL with the same
+            aiohttp session used for the crawl and attach the status code
+            to each UrlResult. Requires ``include_metadata=True``.
 
     Returns:
         List of discovered URLs (str) or UrlResult objects.
     """
+    if check_status and not include_metadata:
+        raise ValueError(
+            "check_status=True requires include_metadata=True to attach status to results"
+        )
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
     visited: set[str] = set()
@@ -404,6 +444,15 @@ async def crawl_async(
 
             await _crawl_page(url, 0)
 
+        if check_status and all_results:
+            await _attach_statuses(
+                session, all_results, semaphore,
+                timeout=timeout,
+                proxy=proxy,
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+            )
+
     if cache:
         try:
             cache.save_visited()
@@ -455,6 +504,7 @@ def crawl(
     scope: str | None = None,
     strategy: str = "dfs",
     cache_dir: str | None = None,
+    check_status: bool = False,
 ) -> list[str] | list[UrlResult]:
     """Synchronous wrapper around crawl_async for simple usage."""
     return asyncio.run(
@@ -480,5 +530,6 @@ def crawl(
             scope=scope,
             strategy=strategy,
             cache_dir=cache_dir,
+            check_status=check_status,
         )
     )
