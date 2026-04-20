@@ -51,6 +51,13 @@ def test_main_catches_nostrax_error(mock_crawl):
 
 
 @patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
+def test_main_returns_130_on_keyboard_interrupt(mock_crawl):
+    mock_crawl.side_effect = KeyboardInterrupt()
+    exit_code = main(["-t", "https://example.com"])
+    assert exit_code == 130
+
+
+@patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
 def test_main_sort(mock_crawl, capsys):
     mock_crawl.return_value = ["https://example.com/z", "https://example.com/a"]
     exit_code = main(["-t", "https://example.com", "--sort"])

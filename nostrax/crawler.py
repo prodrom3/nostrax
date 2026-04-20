@@ -264,200 +264,202 @@ async def crawl_async(
     if proxy:
         logger.debug("Using proxy %s for all outbound fetches", redact_credentials(proxy))
 
-    async with aiohttp.ClientSession(
-        connector=connector,
-        headers=headers,
-        auth=basic_auth,
-    ) as session:
-        if robots:
-            await robots.load(
-                session, url,
-                timeout=timeout,
-                proxy=proxy,
-                connect_timeout=connect_timeout,
-                read_timeout=read_timeout,
-            )
-
-        # Optionally fetch sitemap.xml
-        if use_sitemap:
-            sitemap_url = urljoin(
-                f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
-            )
-            sitemap_urls = await fetch_sitemap(
-                session, sitemap_url,
-                timeout=timeout,
-                proxy=proxy,
-                connect_timeout=connect_timeout,
-                read_timeout=read_timeout,
-            )
-            for su in sitemap_urls:
-                all_results.append(
-                    UrlResult(url=su, source="sitemap.xml", tag="sitemap", depth=0)
+    try:
+        async with aiohttp.ClientSession(
+            connector=connector,
+            headers=headers,
+            auth=basic_auth,
+        ) as session:
+            if robots:
+                await robots.load(
+                    session, url,
+                    timeout=timeout,
+                    proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
                 )
 
-        def _should_follow(link: str) -> bool:
-            """Check if a link should be followed based on domain and scope."""
-            parsed = urlparse(link)
-            if parsed.netloc != base_domain:
-                return False
-            if scope and not parsed.path.startswith(scope):
-                return False
-            normalized = normalize_url(link)
-            return normalized not in visited
-
-        if strategy == "bfs":
-            # Breadth-first crawling
-            queue: deque[tuple[str, int]] = deque()
-            queue.append((url, 0))
-
-            while queue and len(all_results) < max_urls:
-                current_url, current_depth = queue.popleft()
-
-                normalized = normalize_url(current_url)
-                if normalized in visited:
-                    continue
-                visited.add(normalized)
-
-                if cache:
-                    cache.mark_visited(normalized)
-
-                if robots and not robots.is_allowed(current_url):
-                    logger.info("Blocked by robots.txt: %s", current_url)
-                    continue
-
-                if rate_limit > 0:
-                    await asyncio.sleep(rate_limit)
-
-                async with semaphore:
-                    logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
-                    html, resp_time = await fetch_page(
-                        session, current_url,
-                        timeout=timeout,
-                        max_response_size=max_response_size,
-                        retries=retries,
-                        proxy=proxy,
-                        connect_timeout=connect_timeout,
-                        read_timeout=read_timeout,
+            # Optionally fetch sitemap.xml
+            if use_sitemap:
+                sitemap_url = urljoin(
+                    f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
+                )
+                sitemap_urls = await fetch_sitemap(
+                    session, sitemap_url,
+                    timeout=timeout,
+                    proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
+                )
+                for su in sitemap_urls:
+                    all_results.append(
+                        UrlResult(url=su, source="sitemap.xml", tag="sitemap", depth=0)
                     )
 
-                if html is None:
-                    continue
+            def _should_follow(link: str) -> bool:
+                """Check if a link should be followed based on domain and scope."""
+                parsed = urlparse(link)
+                if parsed.netloc != base_domain:
+                    return False
+                if scope and not parsed.path.startswith(scope):
+                    return False
+                normalized = normalize_url(link)
+                return normalized not in visited
 
-                found = await loop.run_in_executor(
-                    None,
-                    partial(
-                        extract_urls, html, current_url,
-                        tags=tags, deduplicate=False,
-                        include_metadata=True, depth=current_depth,
-                    ),
-                )
+            if strategy == "bfs":
+                # Breadth-first crawling
+                queue: deque[tuple[str, int]] = deque()
+                queue.append((url, 0))
 
-                for r in found:
-                    r.response_time = resp_time
-                all_results.extend(found)
+                while queue and len(all_results) < max_urls:
+                    current_url, current_depth = queue.popleft()
 
-                if cache:
+                    normalized = normalize_url(current_url)
+                    if normalized in visited:
+                        continue
+                    visited.add(normalized)
+
+                    if cache:
+                        cache.mark_visited(normalized)
+
+                    if robots and not robots.is_allowed(current_url):
+                        logger.info("Blocked by robots.txt: %s", current_url)
+                        continue
+
+                    if rate_limit > 0:
+                        await asyncio.sleep(rate_limit)
+
+                    async with semaphore:
+                        logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
+                        html, resp_time = await fetch_page(
+                            session, current_url,
+                            timeout=timeout,
+                            max_response_size=max_response_size,
+                            retries=retries,
+                            proxy=proxy,
+                            connect_timeout=connect_timeout,
+                            read_timeout=read_timeout,
+                        )
+
+                    if html is None:
+                        continue
+
+                    found = await loop.run_in_executor(
+                        None,
+                        partial(
+                            extract_urls, html, current_url,
+                            tags=tags, deduplicate=False,
+                            include_metadata=True, depth=current_depth,
+                        ),
+                    )
+
                     for r in found:
-                        cache.save_result(r)
+                        r.response_time = resp_time
+                    all_results.extend(found)
 
-                pages_crawled += 1
-                if progress_callback is not None:
-                    progress_callback(pages_crawled, len(all_results))
+                    if cache:
+                        for r in found:
+                            cache.save_result(r)
 
-                if current_depth < depth:
-                    for result in found:
-                        if _should_follow(result.url):
-                            queue.append((result.url, current_depth + 1))
+                    pages_crawled += 1
+                    if progress_callback is not None:
+                        progress_callback(pages_crawled, len(all_results))
 
-        else:
-            # Depth-first crawling (default)
-            async def _crawl_page(current_url: str, current_depth: int) -> None:
-                nonlocal pages_crawled
+                    if current_depth < depth:
+                        for result in found:
+                            if _should_follow(result.url):
+                                queue.append((result.url, current_depth + 1))
 
-                normalized = normalize_url(current_url)
-                if normalized in visited:
-                    return
-                visited.add(normalized)
+            else:
+                # Depth-first crawling (default)
+                async def _crawl_page(current_url: str, current_depth: int) -> None:
+                    nonlocal pages_crawled
 
-                if cache:
-                    cache.mark_visited(normalized)
+                    normalized = normalize_url(current_url)
+                    if normalized in visited:
+                        return
+                    visited.add(normalized)
 
-                if len(all_results) >= max_urls:
-                    return
+                    if cache:
+                        cache.mark_visited(normalized)
 
-                if robots and not robots.is_allowed(current_url):
-                    logger.info("Blocked by robots.txt: %s", current_url)
-                    return
+                    if len(all_results) >= max_urls:
+                        return
 
-                if rate_limit > 0:
-                    await asyncio.sleep(rate_limit)
+                    if robots and not robots.is_allowed(current_url):
+                        logger.info("Blocked by robots.txt: %s", current_url)
+                        return
 
-                async with semaphore:
-                    logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
-                    html, resp_time = await fetch_page(
-                        session, current_url,
-                        timeout=timeout,
-                        max_response_size=max_response_size,
-                        retries=retries,
-                        proxy=proxy,
-                        connect_timeout=connect_timeout,
-                        read_timeout=read_timeout,
+                    if rate_limit > 0:
+                        await asyncio.sleep(rate_limit)
+
+                    async with semaphore:
+                        logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
+                        html, resp_time = await fetch_page(
+                            session, current_url,
+                            timeout=timeout,
+                            max_response_size=max_response_size,
+                            retries=retries,
+                            proxy=proxy,
+                            connect_timeout=connect_timeout,
+                            read_timeout=read_timeout,
+                        )
+
+                    if html is None:
+                        return
+
+                    found = await loop.run_in_executor(
+                        None,
+                        partial(
+                            extract_urls, html, current_url,
+                            tags=tags, deduplicate=False,
+                            include_metadata=True, depth=current_depth,
+                        ),
                     )
 
-                if html is None:
-                    return
+                    for r in found:
+                        r.response_time = resp_time
+                    all_results.extend(found)
 
-                found = await loop.run_in_executor(
-                    None,
-                    partial(
-                        extract_urls, html, current_url,
-                        tags=tags, deduplicate=False,
-                        include_metadata=True, depth=current_depth,
-                    ),
+                    if cache:
+                        for r in found:
+                            cache.save_result(r)
+
+                    pages_crawled += 1
+                    if progress_callback is not None:
+                        progress_callback(pages_crawled, len(all_results))
+
+                    if len(all_results) >= max_urls:
+                        logger.warning(
+                            "Reached max URL limit (%d), stopping crawl.", max_urls
+                        )
+                        return
+
+                    if current_depth < depth:
+                        tasks = []
+                        for result in found:
+                            if _should_follow(result.url):
+                                tasks.append(_crawl_page(result.url, current_depth + 1))
+                        if tasks:
+                            await asyncio.gather(*tasks)
+
+                await _crawl_page(url, 0)
+
+            if check_status and all_results:
+                await _attach_statuses(
+                    session, all_results, semaphore,
+                    timeout=timeout,
+                    proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
                 )
 
-                for r in found:
-                    r.response_time = resp_time
-                all_results.extend(found)
-
-                if cache:
-                    for r in found:
-                        cache.save_result(r)
-
-                pages_crawled += 1
-                if progress_callback is not None:
-                    progress_callback(pages_crawled, len(all_results))
-
-                if len(all_results) >= max_urls:
-                    logger.warning(
-                        "Reached max URL limit (%d), stopping crawl.", max_urls
-                    )
-                    return
-
-                if current_depth < depth:
-                    tasks = []
-                    for result in found:
-                        if _should_follow(result.url):
-                            tasks.append(_crawl_page(result.url, current_depth + 1))
-                    if tasks:
-                        await asyncio.gather(*tasks)
-
-            await _crawl_page(url, 0)
-
-        if check_status and all_results:
-            await _attach_statuses(
-                session, all_results, semaphore,
-                timeout=timeout,
-                proxy=proxy,
-                connect_timeout=connect_timeout,
-                read_timeout=read_timeout,
-            )
-
-    if cache:
-        try:
-            cache.save_visited()
-        finally:
-            cache.close()
+    finally:
+        if cache:
+            try:
+                cache.save_visited()
+            finally:
+                cache.close()
 
     if pages_crawled == 0 and not had_cached_results:
         raise FetchError(

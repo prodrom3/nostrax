@@ -361,6 +361,14 @@ def main(argv: list[str] | None = None) -> int:
     except NostraxError as e:
         logging.getLogger(__name__).error("%s", e)
         return 1
+    except KeyboardInterrupt:
+        # crawl_async's try/finally flushes the visited cache on the way
+        # out, so a resume picks up from where we stopped. Exit 130 is
+        # the Unix convention for a process terminated by SIGINT.
+        logging.getLogger(__name__).warning(
+            "Interrupted; partial state saved to cache (if --cache-dir was set)."
+        )
+        return 130
     finally:
         if pbar is not None:
             pbar.close()

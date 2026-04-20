@@ -226,6 +226,44 @@ def test_crawl_deduplicates():
         assert urls.count("https://example.com/same") == 1
 
 
+def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
+    """crawl_async wraps the session block in try/finally so that even an
+    exception raised mid-crawl (SIGINT-as-KeyboardInterrupt, connection
+    reset, anything) leaves the visited-set flushed to disk for resume."""
+    monkeypatch.chdir(tmp_path)
+    cache_dir = str(tmp_path / "cache")
+
+    import aiohttp as aio
+
+    class Boom(Exception):
+        pass
+
+    def raising_get(*args, **kwargs):
+        # First GET succeeds and populates visited; second raises Boom.
+        if raising_get.calls == 0:
+            raising_get.calls += 1
+            return _make_mock_response(SAMPLE_HTML)
+        raise Boom("simulated interrupt")
+    raising_get.calls = 0
+
+    with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=raising_get)
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        import pytest
+        with pytest.raises(Boom):
+            crawl("https://example.com", depth=1, cache_dir=cache_dir)
+
+    # The visited file must exist even though the crawl raised.
+    import json
+    visited_path = tmp_path / "cache" / "visited.json"
+    assert visited_path.is_file(), "visited cache was not flushed on exception"
+    visited = json.loads(visited_path.read_text())
+    assert any("example.com" in u for u in visited)
+
+
 def test_crawl_check_status_requires_metadata():
     import pytest
 
