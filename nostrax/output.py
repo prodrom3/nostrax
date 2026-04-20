@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import replace
 
 from nostrax.models import UrlResult
 
@@ -35,14 +36,15 @@ def format_urls(
     Returns:
         Formatted string.
     """
-    # Normalize to UrlResult if needed
+    # Normalise to a fresh list of UrlResult copies. format_urls is a
+    # pure formatter; it must not mutate the caller's objects, so we
+    # always work on shallow copies here.
     results: list[UrlResult]
     if urls and isinstance(urls[0], str):
         results = [UrlResult(url=u) for u in urls]
     else:
-        results = urls  # type: ignore[assignment]
+        results = [replace(r) for r in urls]  # type: ignore[arg-type]
 
-    # Attach statuses if provided
     if statuses:
         for r in results:
             if r.url in statuses:

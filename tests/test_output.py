@@ -114,6 +114,15 @@ def test_format_with_statuses():
     assert "[404]" in output
 
 
+def test_format_does_not_mutate_caller_results():
+    """format_urls must not write back into the UrlResult objects the
+    caller passed in; a Python-API consumer expects to re-use them."""
+    results = [UrlResult(url="https://example.com/a")]
+    statuses = {"https://example.com/a": 200}
+    format_urls(results, "plain", statuses=statuses)
+    assert results[0].status is None
+
+
 def test_format_json_with_statuses():
     statuses = {"https://example.com/a": 200}
     results = [UrlResult(url="https://example.com/a")]
