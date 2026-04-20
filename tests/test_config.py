@@ -1,9 +1,14 @@
 """Tests for nostrax.config."""
 
-import os
 import argparse
 
-from nostrax.config import load_config, merge_config, _parse_simple
+from nostrax.cli import build_parser
+from nostrax.config import (
+    _parse_simple,
+    load_config,
+    merge_config,
+    user_provided_attrs,
+)
 
 
 def test_parse_simple(tmp_path):
@@ -25,30 +30,50 @@ def test_parse_simple(tmp_path):
     assert result["rate_limit"] == 0.5
 
 
-def test_merge_config_applies_defaults():
+def test_merge_config_applies_when_user_did_not_provide_flag():
     args = argparse.Namespace(
-        depth=0,
-        timeout=10,
-        proxy=None,
-        respect_robots=False,
+        depth=0, timeout=10, proxy=None, respect_robots=False,
     )
-    config = {"proxy": "http://proxy:8080", "respect_robots": True}
+    config = {
+        "proxy": "http://proxy:8080",
+        "respect_robots": True,
+        "depth": 3,
+        "timeout": 30,
+    }
+    merge_config(args, config, provided=set())
 
-    merge_config(args, config)
     assert args.proxy == "http://proxy:8080"
     assert args.respect_robots is True
+    # Regression: previously the merge was skipped for non-None / non-False
+    # defaults, so int-valued config keys were silently ignored.
+    assert args.depth == 3
+    assert args.timeout == 30
 
 
-def test_merge_config_cli_takes_priority():
-    args = argparse.Namespace(
-        proxy="http://my-proxy:9090",
-        depth=5,
-    )
+def test_merge_config_cli_wins_when_user_provided_flag():
+    args = argparse.Namespace(proxy="http://my-proxy:9090", depth=5)
     config = {"proxy": "http://other:8080", "depth": 2}
+    merge_config(args, config, provided={"proxy", "depth"})
 
-    merge_config(args, config)
-    # CLI value should win
     assert args.proxy == "http://my-proxy:9090"
+    assert args.depth == 5
+
+
+def test_user_provided_attrs_detects_only_supplied_flags():
+    parser = build_parser()
+    provided = user_provided_attrs(parser, ["-t", "https://example.com", "--depth", "3"])
+    assert "target" in provided
+    assert "depth" in provided
+    assert "timeout" not in provided
+    assert "max_urls" not in provided
+
+
+def test_user_provided_attrs_handles_short_and_long_forms():
+    parser = build_parser()
+    provided = user_provided_attrs(
+        parser, ["-t", "https://x", "-d", "2", "--format", "json"]
+    )
+    assert provided == {"target", "depth", "format"}
 
 
 def test_load_config_no_file(tmp_path, monkeypatch):

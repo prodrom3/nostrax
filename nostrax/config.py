@@ -5,9 +5,9 @@ or home directory, merging with CLI arguments.
 
 Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
-Last updated: 2026-04-02
 """
 
+import argparse
 import logging
 import os
 
@@ -126,21 +126,41 @@ def load_config() -> dict:
         return {}
 
 
-def merge_config(args: object, config: dict) -> None:
-    """Apply config values to args, but CLI arguments take priority.
+def user_provided_attrs(
+    parser: argparse.ArgumentParser, argv: list[str] | None
+) -> set[str]:
+    """Return the set of ``dest`` names the user explicitly passed on argv.
 
-    Only sets values that are still at their defaults.
+    Done by temporarily setting every action's default to ``argparse.SUPPRESS``
+    and reparsing, so the resulting namespace contains only user-supplied
+    values. The parser is restored before returning so the caller can keep
+    using it with its real defaults.
+    """
+    saved: list[tuple[argparse.Action, object]] = []
+    for action in parser._actions:
+        saved.append((action, action.default))
+        action.default = argparse.SUPPRESS
+    try:
+        ns = parser.parse_args(argv)
+    finally:
+        for action, default in saved:
+            action.default = default
+    return set(vars(ns).keys())
+
+
+def merge_config(
+    args: object, config: dict, provided: set[str]
+) -> None:
+    """Apply config values to ``args`` for keys the user did not pass on argv.
+
+    ``provided`` is the set of ``dest`` names the user explicitly supplied
+    (see :func:`user_provided_attrs`). Config keys corresponding to those
+    names are skipped; every other recognised key overrides its default.
     """
     for key, value in config.items():
-        # Convert hyphens to underscores for argparse compatibility
         attr = key.replace("-", "_")
         if not hasattr(args, attr):
             continue
-
-        current = getattr(args, attr)
-
-        # Only apply config if the CLI arg is at its default
-        # For booleans, default is False; for optional strings, default is None
-        # For ints/floats, compare to parser defaults
-        if current is None or current is False:
-            setattr(args, attr, value)
+        if attr in provided:
+            continue
+        setattr(args, attr, value)

@@ -12,7 +12,7 @@ import os
 import sys
 
 from nostrax import __version__
-from nostrax.config import load_config, merge_config
+from nostrax.config import load_config, merge_config, user_provided_attrs
 from nostrax.crawler import crawl_async
 from nostrax.extractor import TAG_ATTRS
 from nostrax.validation import (
@@ -245,11 +245,13 @@ def main(argv: list[str] | None = None) -> int:
         print(check_update())
         return 0
 
-    # Load config file (unless --no-config)
+    # Load config file (unless --no-config). Config values apply only to
+    # flags the user did not pass on argv; CLI wins over config.
     if not args.no_config:
         config = load_config()
         if config:
-            merge_config(args, config)
+            provided = user_provided_attrs(parser, argv)
+            merge_config(args, config, provided)
 
     if args.target is None:
         parser.error("the following arguments are required: -t/--target")
