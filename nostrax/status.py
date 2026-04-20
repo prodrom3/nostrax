@@ -49,10 +49,7 @@ async def check_statuses(
     semaphore = asyncio.Semaphore(max_concurrent)
     results: dict[str, int | None] = {}
 
-    connector = aiohttp.TCPConnector(
-        limit=max_concurrent,
-        enable_cleanup_closed=True,
-    )
+    connector = aiohttp.TCPConnector(limit=max_concurrent)
     headers = {"User-Agent": user_agent}
 
     async with aiohttp.ClientSession(
