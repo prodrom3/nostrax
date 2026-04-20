@@ -32,6 +32,8 @@ def _make_mock_response(text, status=200):
     mock_resp = AsyncMock()
     mock_resp.status = status
     mock_resp.text = AsyncMock(return_value=text)
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
     return mock_resp
 
 

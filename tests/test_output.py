@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 
 import pytest
 
@@ -25,7 +24,8 @@ def test_format_json():
 
 def test_format_csv():
     result = format_urls(URLS, "csv")
-    lines = result.split("\n")
+    # Python's csv module emits CRLF line terminators per RFC 4180.
+    lines = result.splitlines()
     assert lines[0] == "url"
     assert lines[1] == "https://example.com/a"
     assert lines[2] == "https://example.com/b"
@@ -41,31 +41,25 @@ def test_format_empty():
     assert format_urls([], "json") == "[]"
 
 
-def test_write_output_to_file():
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        path = f.name
+def test_write_output_to_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / "out.txt")
 
-    try:
-        write_output(URLS, fmt="plain", output_file=path)
-        with open(path, encoding="utf-8") as f:
-            content = f.read()
-        assert "https://example.com/a" in content
-        assert "https://example.com/b" in content
-    finally:
-        os.unlink(path)
+    write_output(URLS, fmt="plain", output_file=path)
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+    assert "https://example.com/a" in content
+    assert "https://example.com/b" in content
 
 
-def test_write_output_json_to_file():
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        path = f.name
+def test_write_output_json_to_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / "out.json")
 
-    try:
-        write_output(URLS, fmt="json", output_file=path)
-        with open(path, encoding="utf-8") as f:
-            parsed = json.load(f)
-        assert parsed == URLS
-    finally:
-        os.unlink(path)
+    write_output(URLS, fmt="json", output_file=path)
+    with open(path, encoding="utf-8") as f:
+        parsed = json.load(f)
+    assert parsed == URLS
 
 
 def test_write_output_blocks_path_traversal(tmp_path, monkeypatch):

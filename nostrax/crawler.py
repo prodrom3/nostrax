@@ -180,7 +180,6 @@ async def crawl_async(
     connector = aiohttp.TCPConnector(
         limit=max_concurrent,
         limit_per_host=max_concurrent,
-        enable_cleanup_closed=True,
         ttl_dns_cache=DEFAULT_DNS_CACHE_TTL,
         use_dns_cache=True,
     )

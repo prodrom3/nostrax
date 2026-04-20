@@ -22,18 +22,27 @@ SAMPLE_HTML_PAGE2 = """
 """
 
 
-def _make_mock_response(text, status=200, content_length=None):
-    """Create a mock aiohttp response as an async context manager."""
+def _make_mock_response(text, status=200, content_length=None, content_type="text/html"):
+    """Create a mock aiohttp response usable as an async context manager.
+
+    The response object is returned from `session.get(...)` and is then
+    entered via `async with ... as response`. We wire `__aenter__` to yield
+    the same mock so configured attributes actually reach the code under test.
+    """
     encoded = text.encode("utf-8")
     mock_resp = AsyncMock()
     mock_resp.status = status
     mock_resp.content_length = content_length
+    mock_resp.content_type = content_type
     mock_resp.raise_for_status = MagicMock()
     mock_resp.get_encoding = MagicMock(return_value="utf-8")
 
     mock_content = MagicMock()
     mock_content.read = AsyncMock(return_value=encoded)
     mock_resp.content = mock_content
+
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
 
     return mock_resp
 

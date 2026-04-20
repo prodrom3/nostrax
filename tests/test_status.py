@@ -10,6 +10,8 @@ from nostrax.status import check_url_status, check_statuses
 def _make_mock_response(status=200):
     mock_resp = AsyncMock()
     mock_resp.status = status
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
     return mock_resp
 
 
