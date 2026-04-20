@@ -18,6 +18,7 @@ maintainers = [
 dependencies = [
     "aiohttp>=3.9",
     "beautifulsoup4>=4.12",
+    "defusedxml>=0.7",
     "lxml>=5.0",
 ]
 

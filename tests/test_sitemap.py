@@ -109,6 +109,16 @@ def test_safe_parse_valid_xml():
     assert result.tag == "root"
 
 
+def test_safe_parse_rejects_xml_bomb():
+    """Billion-laughs style expansion should be refused by defusedxml."""
+    bomb = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;">]>'
+        '<lolz>&lol2;</lolz>'
+    )
+    assert _safe_parse_xml(bomb) is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_sitemap_circular_reference():
     """Circular sitemap references should not cause infinite recursion."""

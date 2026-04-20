@@ -8,6 +8,8 @@ import logging
 from xml.etree import ElementTree
 
 import aiohttp
+import defusedxml.ElementTree as DefusedET
+from defusedxml.common import DefusedXmlException
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +20,21 @@ MAX_SITEMAP_SIZE = 50 * 1024 * 1024
 
 
 def _safe_parse_xml(text: str) -> ElementTree.Element | None:
-    """Parse XML safely, disabling external entity processing."""
-    # Reject DOCTYPE declarations to prevent XXE attacks
+    """Parse XML safely, disabling external entity and DTD processing.
+
+    Uses defusedxml so classic XXE, billion-laughs, and external-entity
+    attacks are refused at parse time rather than evaluated. A redundant
+    string-level DOCTYPE/ENTITY rejection is kept as belt-and-suspenders
+    in case defusedxml is ever swapped or downgraded.
+    """
     if "<!DOCTYPE" in text or "<!ENTITY" in text:
         logger.warning("Rejecting XML with DOCTYPE/ENTITY declarations (XXE prevention)")
         return None
     try:
-        return ElementTree.fromstring(text)
+        return DefusedET.fromstring(text)
+    except DefusedXmlException as e:
+        logger.warning("defusedxml refused sitemap payload: %s", e)
+        return None
     except ElementTree.ParseError as e:
         logger.error("Failed to parse sitemap XML: %s", e)
         return None
