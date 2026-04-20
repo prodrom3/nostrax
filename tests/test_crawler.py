@@ -22,20 +22,26 @@ SAMPLE_HTML_PAGE2 = """
 """
 
 
-def _make_mock_response(text, status=200, content_length=None, content_type="text/html"):
+def _make_mock_response(
+    text, status=200, content_length=None, content_type="text/html", charset="utf-8"
+):
     """Create a mock aiohttp response usable as an async context manager.
 
     The response object is returned from `session.get(...)` and is then
     entered via `async with ... as response`. We wire `__aenter__` to yield
     the same mock so configured attributes actually reach the code under test.
+
+    ``charset`` may be None to simulate a response whose Content-Type header
+    omits the charset directive; fetch_page must default to utf-8 in that
+    case without calling aiohttp's body-sniffing fallback.
     """
     encoded = text.encode("utf-8")
     mock_resp = AsyncMock()
     mock_resp.status = status
     mock_resp.content_length = content_length
     mock_resp.content_type = content_type
+    mock_resp.charset = charset
     mock_resp.raise_for_status = MagicMock()
-    mock_resp.get_encoding = MagicMock(return_value="utf-8")
 
     mock_content = MagicMock()
     mock_content.read = AsyncMock(return_value=encoded)
@@ -67,6 +73,20 @@ async def test_fetch_page_failure():
 
     html, resp_time = await fetch_page(mock_session, "https://example.com")
     assert html is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_decodes_when_content_type_omits_charset():
+    """A real aiohttp response with no charset in Content-Type (example.com
+    does exactly this) must decode cleanly as utf-8 rather than triggering
+    aiohttp's body-sniffing fallback, which raises when content was read via
+    content.read() instead of text()."""
+    mock_resp = _make_mock_response("<html>OK</html>", charset=None)
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    html, _ = await fetch_page(mock_session, "https://example.com")
+    assert html == "<html>OK</html>"
 
 
 @pytest.mark.asyncio

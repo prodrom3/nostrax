@@ -90,8 +90,12 @@ async def fetch_page(
                     )
                     return None, elapsed
 
+                # response.charset returns the Content-Type charset or None.
+                # We avoid aiohttp's get_encoding() because it raises
+                # RuntimeError on a body read via .content.read() (no
+                # charset in header and no internal buffer to sniff).
                 text = body.decode(
-                    response.get_encoding() or "utf-8", errors="replace"
+                    response.charset or "utf-8", errors="replace"
                 )
                 return text, elapsed
 
