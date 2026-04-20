@@ -38,6 +38,42 @@ DEFAULT_DNS_CACHE_TTL = 300  # 5 minutes
 _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 
 
+class PerHostRateLimiter:
+    """Enforces a minimum interval between requests to the same host.
+
+    The old implementation ran ``await asyncio.sleep(rate_limit)`` before
+    every fetch, applied globally. A multi-domain crawl that asked for
+    1 req/s therefore capped the whole crawl at 1 req/s even across
+    unrelated hosts, and concurrent tasks that slept at the same instant
+    still woke up in lockstep.
+
+    This limiter keys by ``urlparse(url).netloc``. Each host has its own
+    ``asyncio.Lock`` so waits are serialised per-host, and ``_last[host]``
+    records the most recent wait completion so the next caller for that
+    host sleeps just long enough to land on the next allowed slot.
+    """
+
+    def __init__(self, min_interval: float) -> None:
+        self._min_interval = float(min_interval)
+        self._last: dict[str, float] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def wait(self, host: str) -> None:
+        if self._min_interval <= 0 or not host:
+            return
+        lock = self._locks.get(host)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[host] = lock
+        async with lock:
+            last = self._last.get(host, 0.0)
+            now = time.monotonic()
+            deficit = last + self._min_interval - now
+            if deficit > 0:
+                await asyncio.sleep(deficit)
+            self._last[host] = time.monotonic()
+
+
 def _build_timeout(
     total: int | float,
     connect: float | None = None,
@@ -230,6 +266,7 @@ async def crawl_async(
         )
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
+    rate_limiter = PerHostRateLimiter(rate_limit)
     visited: set[str] = set()
     all_results: list[UrlResult] = []
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -326,8 +363,7 @@ async def crawl_async(
                         logger.info("Blocked by robots.txt: %s", current_url)
                         continue
 
-                    if rate_limit > 0:
-                        await asyncio.sleep(rate_limit)
+                    await rate_limiter.wait(urlparse(current_url).netloc)
 
                     async with semaphore:
                         logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
@@ -390,8 +426,7 @@ async def crawl_async(
                         logger.info("Blocked by robots.txt: %s", current_url)
                         return
 
-                    if rate_limit > 0:
-                        await asyncio.sleep(rate_limit)
+                    await rate_limiter.wait(urlparse(current_url).netloc)
 
                     async with semaphore:
                         logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
