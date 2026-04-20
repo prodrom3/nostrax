@@ -75,6 +75,80 @@ def test_empty_base_href_is_ignored():
     assert urls == ["https://example.com/docs/page.html"]
 
 
+def test_srcset_on_img_returns_every_candidate():
+    html = (
+        '<img src="fallback.jpg" '
+        'srcset="small.jpg 300w, medium.jpg 800w, large.jpg 1600w">'
+    )
+    urls = extract_urls(
+        html, "https://example.com/", tags={"img"}
+    )
+    assert set(urls) == {
+        "https://example.com/fallback.jpg",
+        "https://example.com/small.jpg",
+        "https://example.com/medium.jpg",
+        "https://example.com/large.jpg",
+    }
+
+
+def test_srcset_on_source_inside_picture():
+    html = (
+        '<picture>'
+        '<source srcset="hero@2x.webp 2x, hero.webp 1x" type="image/webp">'
+        '</picture>'
+    )
+    urls = extract_urls(html, "https://example.com/", tags={"source"})
+    assert set(urls) == {
+        "https://example.com/hero@2x.webp",
+        "https://example.com/hero.webp",
+    }
+
+
+def test_meta_refresh_extracted_from_content():
+    html = '<meta http-equiv="refresh" content="5; url=https://example.com/next">'
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == ["https://example.com/next"]
+
+
+def test_meta_refresh_case_insensitive_and_quoted():
+    html = (
+        '<meta http-equiv="Refresh" '
+        'content="0; URL=\'https://example.com/quoted\'">'
+    )
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == ["https://example.com/quoted"]
+
+
+def test_meta_without_refresh_is_ignored():
+    html = '<meta http-equiv="content-type" content="text/html; charset=utf-8">'
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == []
+
+
+def test_meta_refresh_without_url_is_ignored():
+    html = '<meta http-equiv="refresh" content="3">'
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == []
+
+
+def test_all_tags_includes_meta_and_srcset():
+    html = (
+        '<meta http-equiv="refresh" content="0; url=/m">'
+        '<img srcset="/a.jpg 1x, /b.jpg 2x">'
+        '<a href="/link">x</a>'
+    )
+    urls = extract_urls(html, "https://example.com/")
+    # Default tags is {"a"}, so meta and img are NOT included.
+    assert urls == ["https://example.com/link"]
+
+    from nostrax.extractor import TAG_ATTRS
+    urls = extract_urls(html, "https://example.com/", tags=set(TAG_ATTRS))
+    assert "https://example.com/m" in urls
+    assert "https://example.com/a.jpg" in urls
+    assert "https://example.com/b.jpg" in urls
+    assert "https://example.com/link" in urls
+
+
 def test_resolves_relative_urls():
     urls = extract_urls(SAMPLE_HTML, BASE_URL)
     assert "https://example.com/about" in urls
