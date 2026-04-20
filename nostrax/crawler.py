@@ -404,9 +404,11 @@ async def crawl_async(
 
             await _crawl_page(url, 0)
 
-    # Save final visited state
     if cache:
-        cache.save_visited()
+        try:
+            cache.save_visited()
+        finally:
+            cache.close()
 
     if pages_crawled == 0 and not had_cached_results:
         raise FetchError(

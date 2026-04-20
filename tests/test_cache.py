@@ -65,6 +65,53 @@ def test_cache_round_trip_preserves_status_and_response_time(tmp_path, monkeypat
     assert results[1].response_time is None
 
 
+def test_save_result_requires_initialize(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    with pytest.raises(RuntimeError, match="initialize"):
+        cache.save_result(UrlResult(url="https://example.com/"))
+
+
+def test_save_result_survives_after_close_and_raises(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    cache.save_result(UrlResult(url="https://example.com/a"))
+    cache.close()
+
+    with pytest.raises(RuntimeError, match="initialize"):
+        cache.save_result(UrlResult(url="https://example.com/b"))
+
+    # Close is idempotent; second call must not raise.
+    cache.close()
+
+
+def test_save_result_flushes_so_concurrent_reader_sees_writes(tmp_path, monkeypatch):
+    """Regression: the write path must flush to the OS so a process that
+    crashes between writes still leaves the already-written results on disk,
+    which is the whole point of --cache-dir resume support."""
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+
+    for i in range(10):
+        cache.save_result(UrlResult(url=f"https://example.com/{i}"))
+
+    # Read from a second CrawlCache instance without closing the writer.
+    # With per-URL open/close semantics this always worked; with the new
+    # long-lived handle we need an explicit flush() to maintain that.
+    reader = CrawlCache(str(tmp_path))
+    reader.initialize()
+    results = reader.load_results()
+    assert len(results) == 10
+    reader.close()
+    cache.close()
+
+
 def test_cache_clear(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache = CrawlCache(str(tmp_path))
