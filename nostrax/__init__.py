@@ -2,10 +2,15 @@
 
 Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
-Last updated: 2026-04-02
 """
 
-__version__ = "2.0.0"
+from importlib import metadata as _metadata
+
+try:
+    __version__ = _metadata.version("nostrax")
+except _metadata.PackageNotFoundError:
+    # Running from a checkout without an install (e.g. in-tree tests).
+    __version__ = "0.0.0+unknown"
 
 from nostrax.extractor import extract_urls
 from nostrax.crawler import crawl, crawl_async

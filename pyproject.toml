@@ -37,6 +37,9 @@ dev = [
 [project.scripts]
 nostrax = "nostrax.cli:main"
 
+[tool.setuptools.package-data]
+nostrax = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
