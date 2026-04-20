@@ -4,16 +4,15 @@ import argparse
 
 from nostrax.cli import build_parser
 from nostrax.config import (
-    _parse_simple,
     load_config,
     merge_config,
     user_provided_attrs,
 )
 
 
-def test_parse_simple(tmp_path):
-    config_file = tmp_path / ".nostraxrc"
-    config_file.write_text(
+def test_load_config_parses_toml(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".nostraxrc").write_text(
         '# comment\n'
         'depth = 3\n'
         'timeout = 30\n'
@@ -22,7 +21,7 @@ def test_parse_simple(tmp_path):
         'rate_limit = 0.5\n'
     )
 
-    result = _parse_simple(str(config_file))
+    result = load_config()
     assert result["depth"] == 3
     assert result["timeout"] == 30
     assert result["user_agent"] == "mybot/1.0"

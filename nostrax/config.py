@@ -67,45 +67,13 @@ def _find_config_file() -> str | None:
 
 
 def _parse_toml(path: str) -> dict:
-    """Parse a TOML file. Uses tomllib (3.11+) or falls back to manual parsing."""
+    """Parse a TOML file via stdlib tomllib (3.11+) or the tomli backport (3.10)."""
     try:
         import tomllib
     except ImportError:
-        try:
-            import tomli as tomllib
-        except ImportError:
-            # Simple fallback parser for key = value lines
-            return _parse_simple(path)
-
+        import tomli as tomllib  # pyproject.toml pins this on Python < 3.11
     with open(path, "rb") as f:
         return tomllib.load(f)
-
-
-def _parse_simple(path: str) -> dict:
-    """Simple key=value parser for environments without tomllib."""
-    result: dict = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("["):
-                continue
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-
-            if key in BOOL_KEYS:
-                result[key] = value.lower() in ("true", "1", "yes")
-            elif key in CONFIG_KEYS:
-                try:
-                    result[key] = CONFIG_KEYS[key](value)
-                except (ValueError, TypeError):
-                    logger.warning("Invalid value for %s in config: %s", key, value)
-            else:
-                result[key] = value
-
-    return result
 
 
 def load_config() -> dict:
