@@ -17,6 +17,7 @@ import aiohttp
 from nostrax.cache import CrawlCache
 from nostrax.exceptions import FetchError
 from nostrax.extractor import extract_urls
+from nostrax.metrics import MetricsSink, NullMetricsSink
 from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
 from nostrax.resolver import SafeResolver
@@ -228,6 +229,7 @@ async def crawl_async(
     strategy: str = "dfs",
     cache_dir: str | None = None,
     check_status: bool = False,
+    metrics: MetricsSink | None = None,
 ) -> list[str] | list[UrlResult]:
     """Crawl a URL and optionally follow links concurrently.
 
@@ -263,6 +265,8 @@ async def crawl_async(
         raise ValueError(
             "check_status=True requires include_metadata=True to attach status to results"
         )
+    if metrics is None:
+        metrics = NullMetricsSink()
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
     rate_limiter = PerHostRateLimiter(rate_limit)
@@ -370,6 +374,7 @@ async def crawl_async(
 
                 if robots and not robots.is_allowed(current_url):
                     logger.info("Blocked by robots.txt: %s", current_url)
+                    metrics.on_robots_blocked(current_url)
                     return
 
                 await rate_limiter.wait(urlparse(current_url).netloc)
@@ -386,6 +391,7 @@ async def crawl_async(
                 )
 
                 if html is None:
+                    metrics.on_fetch_failed(current_url, current_depth)
                     return
 
                 found = await loop.run_in_executor(
@@ -408,6 +414,9 @@ async def crawl_async(
                 pages_crawled += 1
                 if progress_callback is not None:
                     progress_callback(pages_crawled, len(all_results))
+                metrics.on_page_fetched(
+                    current_url, current_depth, resp_time, len(found)
+                )
 
                 if len(all_results) >= max_urls:
                     logger.warning(
@@ -519,6 +528,7 @@ def crawl(
     strategy: str = "dfs",
     cache_dir: str | None = None,
     check_status: bool = False,
+    metrics: MetricsSink | None = None,
 ) -> list[str] | list[UrlResult]:
     """Synchronous wrapper around crawl_async for simple usage."""
     return asyncio.run(
@@ -545,5 +555,6 @@ def crawl(
             strategy=strategy,
             cache_dir=cache_dir,
             check_status=check_status,
+            metrics=metrics,
         )
     )
