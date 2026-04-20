@@ -5,6 +5,7 @@ Licensed under the MIT License.
 """
 
 import asyncio
+import inspect
 import logging
 import random
 import time
@@ -274,6 +275,17 @@ async def crawl_async(
         fetcher = fetch_page
     if extractor is None:
         extractor = extract_urls
+    # Extractors run inside loop.run_in_executor (HTML parsing is CPU
+    # bound). An async function passed here would not be awaited by the
+    # executor; it would return a coroutine that later explodes with a
+    # cryptic "coroutine is not subscriptable" when indexed. Refuse up
+    # front with a pointed message instead.
+    if inspect.iscoroutinefunction(extractor):
+        raise TypeError(
+            "Extractor must be a synchronous callable; async extractors "
+            "are not supported because the crawler runs them in a thread "
+            "executor. Wrap async logic in a sync adapter if you need it."
+        )
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
     rate_limiter = PerHostRateLimiter(rate_limit)

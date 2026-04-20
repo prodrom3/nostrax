@@ -61,6 +61,21 @@ def test_custom_extractor_replaces_default():
     assert urls == ["https://override.example/x"]
 
 
+def test_async_extractor_is_refused_with_a_pointed_error():
+    """An async def extractor cannot be awaited by run_in_executor, so
+    the crawler must refuse it up front rather than let it explode later."""
+
+    async def async_extractor(
+        html, base_url, *, tags, deduplicate, include_metadata, depth,
+    ):
+        return []
+
+    # We do not even need to mock the session - the guard fires before
+    # any network activity because the argument is validated early.
+    with pytest.raises(TypeError, match="synchronous callable"):
+        crawl("https://example.com", extractor=async_extractor)
+
+
 def test_extractor_returning_strings_fails_fast_with_clear_error():
     """A custom Extractor that ignores include_metadata=True and returns
     list[str] must trigger a helpful TypeError, not a deep AttributeError
