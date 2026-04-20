@@ -507,28 +507,41 @@ From the CLI, use `-v` / `--verbose` to raise the default log level to `DEBUG`. 
 ```mermaid
 flowchart TD
     CLI["cli.py<br/>argparse + validation + config merge"]
-    Crawler["crawler.py<br/>async DFS / BFS"]
+    Crawler["crawler.py<br/>unified frontier + worker pool"]
     Post["filters / normalize / output<br/>post-processing"]
 
-    Fetch["fetch_page"]
-    Extract["extract_urls<br/>lxml + SoupStrainer"]
+    Frontier["LifoQueue (DFS) / Queue (BFS)<br/>bounded at max_urls * 2"]
+    RateLimiter["PerHostRateLimiter<br/>per-netloc serialisation"]
+    Fetcher["Fetcher protocol<br/>default: fetch_page"]
+    Extractor["Extractor protocol<br/>default: extract_urls"]
     Robots["robots.py"]
-    Cache["cache.py"]
-    Sitemap["sitemap.py"]
-    Status["status.py"]
+    Cache["cache.py<br/>atomic visited + kept-open results"]
+    Sitemap["sitemap.py<br/>defusedxml"]
+    Status["status.py<br/>same aiohttp session"]
 
-    Filters["domain / protocol<br/>regex / dedup"]
+    Connector["aiohttp TCPConnector"]
+    Resolver["SafeResolver<br/>re-applies SSRF classifier"]
+    Metrics["MetricsSink<br/>on_page_fetched / failed / robots_blocked"]
+
+    Filters["filter_by_domain / protocol<br/>regex with per-URL timeout"]
     Output["plain / json<br/>csv / html"]
 
     CLI --> Crawler
     CLI --> Post
 
-    Crawler --> Fetch
-    Crawler --> Extract
+    Crawler --> Frontier
+    Crawler --> RateLimiter
+    Crawler --> Fetcher
+    Crawler --> Extractor
     Crawler --> Robots
     Crawler --> Cache
     Crawler --> Sitemap
     Crawler --> Status
+    Crawler --> Metrics
+
+    Fetcher --> Connector
+    Status --> Connector
+    Connector --> Resolver
 
     Post --> Filters
     Post --> Output
@@ -539,19 +552,22 @@ flowchart TD
 | Module | Purpose |
 |---|---|
 | `nostrax.cli` | Command-line interface, argument parsing, input validation |
-| `nostrax.crawler` | Async recursive crawler (DFS / BFS) |
-| `nostrax.extractor` | HTML parsing and URL extraction (lxml + SoupStrainer) |
-| `nostrax.filters` | Domain, protocol, and regex filters |
+| `nostrax.crawler` | Unified async crawl engine (frontier + worker pool), `PerHostRateLimiter` |
+| `nostrax.extractor` | HTML parsing and URL extraction (lxml + SoupStrainer, `<base>`, `srcset`, meta-refresh) |
+| `nostrax.filters` | Domain, protocol, and `regex`-backed timeout-bounded filters |
 | `nostrax.output` | Output formatting (plain, JSON, CSV) |
 | `nostrax.report` | HTML report generation |
 | `nostrax.models` | `UrlResult` dataclass |
 | `nostrax.normalize` | URL normalization |
-| `nostrax.sitemap` | `sitemap.xml` parser with XXE protection |
+| `nostrax.sitemap` | `sitemap.xml` parser through `defusedxml` |
 | `nostrax.status` | Async HTTP status checker |
 | `nostrax.robots` | `robots.txt` compliance |
-| `nostrax.cache` | On-disk crawl cache for resume |
+| `nostrax.cache` | On-disk crawl cache with atomic visited save + kept-open results handle |
 | `nostrax.config` | `.nostraxrc` loader |
-| `nostrax.validation` | Input validation (SSRF, bounds, headers) |
+| `nostrax.validation` | Input validation (SSRF classifier, bounds, headers, credential redaction) |
+| `nostrax.resolver` | `SafeResolver` for aiohttp, applies the SSRF classifier to every DNS resolution |
+| `nostrax.metrics` | `MetricsSink` protocol and `NullMetricsSink` default |
+| `nostrax.protocols` | `Fetcher` and `Extractor` protocols for extensibility |
 | `nostrax.updater` | PyPI version check |
 | `nostrax.exceptions` | Custom exception hierarchy |
 
@@ -599,6 +615,8 @@ nostrax follows [Semantic Versioning 2.0.0](https://semver.org/).
 The public surface is the symbols exported from `nostrax.__init__` and the CLI flags documented in this README. Anything under `nostrax._*` or any module not re-exported from the top-level package is considered internal and may change without notice.
 
 Security-only patch releases are issued out-of-band for confirmed vulnerabilities with the corresponding advisory.
+
+Per-release changes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Support
 
