@@ -582,12 +582,11 @@ nostrax is hardened by default against common attack vectors in crawler and scra
 
 ### Responsible disclosure
 
-Please do **not** file public GitHub issues for suspected vulnerabilities. Instead:
-
-1. Open a [GitHub private security advisory](https://github.com/prodrom3/nostrax/security/advisories/new) on this repository, or
-2. Contact the maintainers privately with a reproduction and impact assessment.
-
-Maintainers aim to acknowledge reports within 5 business days and provide a remediation timeline based on severity. Fixes for confirmed high-severity issues are released as patch versions; mitigations and affected-version ranges are documented in the release notes.
+See [SECURITY.md](SECURITY.md) for the full vulnerability reporting
+policy. In short: do **not** file public issues for suspected
+vulnerabilities; open a private GitHub security advisory or contact
+the maintainers privately. Acknowledgement within 5 business days;
+triage and remediation plan within 10.
 
 ## Versioning and Stability
 
