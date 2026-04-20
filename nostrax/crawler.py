@@ -431,6 +431,18 @@ async def crawl_async(
                     ),
                 )
 
+                # Guard against custom extractors that ignore
+                # include_metadata=True and return list[str]. Without this
+                # check the crawl would crash at r.response_time = ...
+                # with a cryptic AttributeError far from the real cause.
+                if found and not isinstance(found[0], UrlResult):
+                    raise TypeError(
+                        f"Extractor returned {type(found[0]).__name__} but "
+                        f"the crawler requires UrlResult when called with "
+                        f"include_metadata=True. Custom Extractor "
+                        f"implementations must honour the flag."
+                    )
+
                 for r in found:
                     r.response_time = resp_time
                 all_results.extend(found)

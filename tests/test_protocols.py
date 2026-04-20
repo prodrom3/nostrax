@@ -61,6 +61,32 @@ def test_custom_extractor_replaces_default():
     assert urls == ["https://override.example/x"]
 
 
+def test_extractor_returning_strings_fails_fast_with_clear_error():
+    """A custom Extractor that ignores include_metadata=True and returns
+    list[str] must trigger a helpful TypeError, not a deep AttributeError
+    when the crawler tries to set r.response_time on a string."""
+
+    def bad_extractor(html, base_url, *, tags, deduplicate, include_metadata, depth):
+        # Violates the protocol: should be list[UrlResult] when
+        # include_metadata=True.
+        return ["https://example.com/x"]
+
+    async def stub_fetcher(
+        session, url, *, timeout, max_response_size, retries,
+        proxy, connect_timeout, read_timeout,
+    ):
+        return "<body>x</body>", 1.0
+
+    ctx = _session_context()
+    with patch("nostrax.crawler.aiohttp.ClientSession", return_value=ctx):
+        with pytest.raises(TypeError, match="Extractor returned str"):
+            crawl(
+                "https://example.com",
+                fetcher=stub_fetcher,
+                extractor=bad_extractor,
+            )
+
+
 def test_default_fetcher_and_extractor_still_work_when_unset():
     """Omitting both arguments uses the built-in fetch_page + extract_urls."""
 
