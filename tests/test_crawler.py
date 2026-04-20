@@ -70,6 +70,33 @@ async def test_fetch_page_failure():
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_uses_full_jitter_backoff(monkeypatch):
+    """Retry delays are drawn from random.uniform(0, 2**attempt), not 2**attempt flat."""
+    import aiohttp
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(side_effect=aiohttp.ClientError("fail"))
+
+    observed_ranges: list[tuple[float, float]] = []
+    observed_sleeps: list[float] = []
+
+    def fake_uniform(a, b):
+        observed_ranges.append((a, b))
+        return 0.0  # deterministic, zero wait
+
+    async def fake_sleep(delay):
+        observed_sleeps.append(delay)
+
+    monkeypatch.setattr("nostrax.crawler.random.uniform", fake_uniform)
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    html, _ = await fetch_page(mock_session, "https://example.com", retries=3)
+    assert html is None
+    assert observed_ranges == [(0, 1), (0, 2), (0, 4)]
+    assert observed_sleeps == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_skips_large_content_length():
     mock_resp = _make_mock_response("big", content_length=20_000_000)
     mock_session = AsyncMock()

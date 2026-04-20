@@ -7,7 +7,9 @@ Last updated: 2026-04-02
 
 import asyncio
 import logging
+import random
 import time
+from collections.abc import Callable
 from collections import deque
 from functools import partial
 from urllib.parse import urlparse, urljoin
@@ -92,9 +94,11 @@ async def fetch_page(
         except (aiohttp.ClientError, TimeoutError) as e:
             elapsed = (time.monotonic() - start) * 1000
             if attempt < retries:
-                delay = 2 ** attempt
+                # Full-jitter backoff (AWS Architecture Blog). Removes the
+                # lockstep retries that thunder a rate-limited target.
+                delay = random.uniform(0, 2 ** attempt)
                 logger.debug(
-                    "Retry %d/%d for %s after %.0fms (waiting %ds): %s",
+                    "Retry %d/%d for %s after %.0fms (waiting %.2fs): %s",
                     attempt + 1, retries, url, elapsed, delay, e,
                 )
                 await asyncio.sleep(delay)
