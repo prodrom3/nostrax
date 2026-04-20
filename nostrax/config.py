@@ -20,6 +20,8 @@ CONFIG_KEYS: dict[str, type] = {
     "target": str,
     "depth": int,
     "timeout": int,
+    "connect_timeout": float,
+    "read_timeout": float,
     "user_agent": str,
     "max_concurrent": int,
     "max_urls": int,

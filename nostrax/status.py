@@ -18,15 +18,20 @@ async def check_url_status(
     *,
     timeout: int = 10,
     proxy: str | None = None,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
 ) -> int | None:
     """Send a HEAD request and return the HTTP status code.
 
     Returns None if the request fails entirely.
     """
+    client_timeout = aiohttp.ClientTimeout(
+        total=timeout, connect=connect_timeout, sock_read=read_timeout
+    )
     try:
         async with session.head(
             url,
-            timeout=aiohttp.ClientTimeout(total=timeout),
+            timeout=client_timeout,
             allow_redirects=False,
             proxy=proxy,
         ) as response:
@@ -43,6 +48,8 @@ async def check_statuses(
     user_agent: str = "nostrax/1.0",
     auth: aiohttp.BasicAuth | None = None,
     proxy: str | None = None,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
 ) -> dict[str, int | None]:
     """Check HTTP status for a list of URLs concurrently.
 
@@ -62,7 +69,11 @@ async def check_statuses(
         async def _check(url: str) -> None:
             async with semaphore:
                 results[url] = await check_url_status(
-                    session, url, timeout=timeout, proxy=proxy
+                    session, url,
+                    timeout=timeout,
+                    proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
                 )
 
         await asyncio.gather(*[_check(u) for u in urls])

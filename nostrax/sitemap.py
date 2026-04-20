@@ -46,6 +46,8 @@ async def fetch_sitemap(
     *,
     timeout: int = 10,
     proxy: str | None = None,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
     _depth: int = 0,
     _visited: set[str] | None = None,
 ) -> list[str]:
@@ -68,10 +70,13 @@ async def fetch_sitemap(
 
     urls: list[str] = []
 
+    client_timeout = aiohttp.ClientTimeout(
+        total=timeout, connect=connect_timeout, sock_read=read_timeout
+    )
     try:
         async with session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=timeout),
+            timeout=client_timeout,
             allow_redirects=False,
             proxy=proxy,
         ) as response:
@@ -104,6 +109,8 @@ async def fetch_sitemap(
                     session, loc.text.strip(),
                     timeout=timeout,
                     proxy=proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
                     _depth=_depth + 1,
                     _visited=_visited,
                 )

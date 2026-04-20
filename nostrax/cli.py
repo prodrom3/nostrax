@@ -120,7 +120,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout",
         type=int,
         default=10,
-        help="Request timeout in seconds (default: 10)",
+        help="Total request timeout in seconds (default: 10)",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=None,
+        help="Per-connection timeout in seconds. Defaults to --timeout when unset.",
+    )
+    parser.add_argument(
+        "--read-timeout",
+        type=float,
+        default=None,
+        help="Per-socket-read timeout in seconds. Defaults to --timeout when unset.",
     )
     parser.add_argument(
         "--user-agent",
@@ -327,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
                 tags=tags,
                 deduplicate=not args.no_dedup,
                 timeout=args.timeout,
+                connect_timeout=args.connect_timeout,
+                read_timeout=args.read_timeout,
                 user_agent=args.user_agent,
                 max_concurrent=args.max_concurrent,
                 respect_robots=args.respect_robots,
@@ -395,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
             check_statuses(
                 final_urls,
                 timeout=args.timeout,
+                connect_timeout=args.connect_timeout,
+                read_timeout=args.read_timeout,
                 max_concurrent=args.max_concurrent,
                 user_agent=args.user_agent,
                 auth=__import__("aiohttp").BasicAuth(auth[0], auth[1]) if auth else None,

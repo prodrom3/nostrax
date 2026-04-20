@@ -105,6 +105,26 @@ async def test_fetch_page_forwards_proxy_to_session():
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_applies_separated_timeouts():
+    """connect_timeout and read_timeout are threaded into ClientTimeout
+    alongside the total budget, not silently dropped."""
+    mock_resp = _make_mock_response("<html>OK</html>")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    await fetch_page(
+        mock_session, "https://example.com",
+        timeout=30, connect_timeout=5, read_timeout=15,
+    )
+
+    _, kwargs = mock_session.get.call_args
+    ct = kwargs["timeout"]
+    assert ct.total == 30
+    assert ct.connect == 5
+    assert ct.sock_read == 15
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_uses_full_jitter_backoff(monkeypatch):
     """Retry delays are drawn from random.uniform(0, 2**attempt), not 2**attempt flat."""
     import aiohttp

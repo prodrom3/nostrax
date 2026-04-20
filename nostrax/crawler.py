@@ -37,6 +37,22 @@ DEFAULT_DNS_CACHE_TTL = 300  # 5 minutes
 _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 
 
+def _build_timeout(
+    total: int | float,
+    connect: float | None = None,
+    read: float | None = None,
+) -> aiohttp.ClientTimeout:
+    """Assemble an aiohttp.ClientTimeout from separated budgets.
+
+    ``total`` bounds the whole request. ``connect`` bounds connection
+    acquisition (TLS handshake, pool wait). ``read`` bounds each socket
+    read, which catches slow-drip responses that would otherwise consume
+    the entire total budget one byte at a time. ``None`` means "no
+    per-phase cap, fall back to the total".
+    """
+    return aiohttp.ClientTimeout(total=total, connect=connect, sock_read=read)
+
+
 async def fetch_page(
     session: aiohttp.ClientSession,
     url: str,
@@ -45,6 +61,8 @@ async def fetch_page(
     max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     retries: int = DEFAULT_RETRIES,
     proxy: str | None = None,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
 ) -> tuple[str | None, float]:
     """Fetch a web page and return (html, response_time_ms).
 
@@ -53,12 +71,13 @@ async def fetch_page(
     Skips non-HTML responses and oversized responses.
     Returns (None, 0) on failure.
     """
+    client_timeout = _build_timeout(timeout, connect_timeout, read_timeout)
     for attempt in range(1 + retries):
         start = time.monotonic()
         try:
             async with session.get(
                 url,
-                timeout=aiohttp.ClientTimeout(total=timeout),
+                timeout=client_timeout,
                 allow_redirects=False,
                 proxy=proxy,
             ) as response:
@@ -123,6 +142,8 @@ async def crawl_async(
     tags: set[str] | None = None,
     deduplicate: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
     user_agent: str = DEFAULT_USER_AGENT,
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     respect_robots: bool = False,
@@ -207,7 +228,13 @@ async def crawl_async(
         auth=basic_auth,
     ) as session:
         if robots:
-            await robots.load(session, url, timeout=timeout, proxy=proxy)
+            await robots.load(
+                session, url,
+                timeout=timeout,
+                proxy=proxy,
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
+            )
 
         # Optionally fetch sitemap.xml
         if use_sitemap:
@@ -215,7 +242,11 @@ async def crawl_async(
                 f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
             )
             sitemap_urls = await fetch_sitemap(
-                session, sitemap_url, timeout=timeout, proxy=proxy
+                session, sitemap_url,
+                timeout=timeout,
+                proxy=proxy,
+                connect_timeout=connect_timeout,
+                read_timeout=read_timeout,
             )
             for su in sitemap_urls:
                 all_results.append(
@@ -263,6 +294,8 @@ async def crawl_async(
                         max_response_size=max_response_size,
                         retries=retries,
                         proxy=proxy,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
                     )
 
                 if html is None:
@@ -325,6 +358,8 @@ async def crawl_async(
                         max_response_size=max_response_size,
                         retries=retries,
                         proxy=proxy,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
                     )
 
                 if html is None:
@@ -400,6 +435,8 @@ def crawl(
     tags: set[str] | None = None,
     deduplicate: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
     user_agent: str = DEFAULT_USER_AGENT,
     max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     respect_robots: bool = False,
@@ -423,6 +460,8 @@ def crawl(
             tags=tags,
             deduplicate=deduplicate,
             timeout=timeout,
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
             user_agent=user_agent,
             max_concurrent=max_concurrent,
             respect_robots=respect_robots,

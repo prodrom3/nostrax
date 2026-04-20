@@ -30,15 +30,20 @@ class RobotsChecker:
         *,
         timeout: int = 10,
         proxy: str | None = None,
+        connect_timeout: float | None = None,
+        read_timeout: float | None = None,
     ) -> None:
         """Fetch and parse the robots.txt for the given URL's domain."""
         parsed = urlparse(url)
         robots_url = urljoin(f"{parsed.scheme}://{parsed.netloc}", "/robots.txt")
 
+        client_timeout = aiohttp.ClientTimeout(
+            total=timeout, connect=connect_timeout, sock_read=read_timeout
+        )
         try:
             async with session.get(
                 robots_url,
-                timeout=aiohttp.ClientTimeout(total=timeout),
+                timeout=client_timeout,
                 allow_redirects=False,
                 proxy=proxy,
             ) as response:
