@@ -4,12 +4,13 @@
 
 **Fast, async web crawler and URL extraction toolkit for mapping, analyzing, and auditing websites.**
 
+[![CI](https://github.com/prodrom3/nostrax/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/prodrom3/nostrax/actions/workflows/test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/prodrom3/nostrax)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Async](https://img.shields.io/badge/async-aiohttp-blue.svg)](https://docs.aiohttp.org/)
-[![Tests](https://img.shields.io/badge/tests-150%2B-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-200%2B-brightgreen.svg)](tests/)
 [![SemVer](https://img.shields.io/badge/semver-2.0.0-blue.svg)](https://semver.org/)
 
 <img width="360" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a">
