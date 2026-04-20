@@ -48,6 +48,33 @@ def test_filters_javascript_mailto_anchor():
         assert url != "#section"
 
 
+def test_base_href_overrides_page_url_for_relative_links():
+    html = """
+    <html>
+      <head><base href="https://cdn.example.com/assets/"></head>
+      <body>
+        <a href="page.html">Relative</a>
+        <a href="https://other.example.com/x">Absolute stays absolute</a>
+      </body>
+    </html>
+    """
+    urls = extract_urls(html, "https://example.com/docs/")
+    assert "https://cdn.example.com/assets/page.html" in urls
+    assert "https://other.example.com/x" in urls
+
+
+def test_missing_base_falls_back_to_page_url():
+    html = '<a href="page.html">x</a>'
+    urls = extract_urls(html, "https://example.com/docs/")
+    assert urls == ["https://example.com/docs/page.html"]
+
+
+def test_empty_base_href_is_ignored():
+    html = '<base href=""><a href="page.html">x</a>'
+    urls = extract_urls(html, "https://example.com/docs/")
+    assert urls == ["https://example.com/docs/page.html"]
+
+
 def test_resolves_relative_urls():
     urls = extract_urls(SAMPLE_HTML, BASE_URL)
     assert "https://example.com/about" in urls

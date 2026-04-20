@@ -47,7 +47,8 @@ def extract_urls(
 
     Args:
         html: Raw HTML string.
-        base_url: Base URL for resolving relative paths.
+        base_url: Base URL for resolving relative paths. Overridden by a
+            ``<base href="...">`` element if present in the document.
         tags: Which HTML tags to extract from. Defaults to {"a"}.
         deduplicate: Remove duplicate URLs.
         include_metadata: If True, return UrlResult objects instead of strings.
@@ -59,8 +60,17 @@ def extract_urls(
     if tags is None:
         tags = DEFAULT_TAGS
 
-    strainer = SoupStrainer(list(tags))
+    # Always pull <base> alongside the requested tags so we can honour it
+    # for relative-link resolution even when the caller only asked for <a>.
+    strainer = SoupStrainer(list(tags | {"base"}))
     soup = BeautifulSoup(html, "lxml", parse_only=strainer)
+
+    resolved_base = base_url
+    base_el = soup.find("base")
+    if base_el is not None:
+        href = (base_el.get("href") or "").strip()
+        if href:
+            resolved_base = urljoin(base_url, href)
 
     results: list[UrlResult] = []
     seen: set[str] = set()
@@ -78,7 +88,7 @@ def extract_urls(
             value = value.strip()
             if not value or value.startswith(_SKIP_PREFIXES):
                 continue
-            absolute_url = urljoin(base_url, value)
+            absolute_url = urljoin(resolved_base, value)
 
             if deduplicate:
                 if absolute_url in seen:
