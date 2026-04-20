@@ -2,18 +2,56 @@
 
 Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
-Last updated: 2026-04-02
 """
 
 import ipaddress
 import logging
+import socket
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+_UnsafeIP = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+def _classify_unsafe_ip(ip: _UnsafeIP) -> str | None:
+    """Return a reason string if the address is an unsafe SSRF target, else None."""
+    # Unwrap IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) and recurse.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return _classify_unsafe_ip(ip.ipv4_mapped)
+
+    if ip.is_loopback:
+        return f"loopback IP not allowed: {ip}"
+    if ip.is_link_local:
+        return f"link-local IP not allowed: {ip}"
+    if ip.is_private:
+        return f"private IP not allowed: {ip}"
+    if ip.is_unspecified:
+        return f"unspecified IP not allowed: {ip}"
+    if ip.is_multicast:
+        return f"multicast IP not allowed: {ip}"
+    if ip.is_reserved:
+        return f"reserved IP not allowed: {ip}"
+    # Explicit defence-in-depth against AWS/GCP/Azure IMDS even though
+    # 169.254.169.254 is already caught by is_link_local.
+    if str(ip) == "169.254.169.254":
+        return "cloud metadata endpoint not allowed"
+    return None
+
 
 def validate_target_url(url: str) -> str | None:
-    """Validate a target URL, rejecting unsafe schemes and private IPs.
+    """Validate a target URL, rejecting unsafe schemes and addresses.
+
+    When the hostname is a domain name, resolve it and reject if any
+    returned address is unsafe (loopback, private, link-local, reserved,
+    multicast, unspecified, or the cloud metadata endpoint). This closes
+    the common SSRF hole where a name like ``evil.com`` resolves to an
+    internal IP at fetch time.
+
+    A residual TOCTOU window remains between this validation and the
+    actual fetch, because aiohttp re-resolves DNS itself. Closing that
+    window requires a connector-level resolver that re-validates every
+    resolution at request time; tracked as a follow-up.
 
     Returns an error message string, or None if valid.
     """
@@ -29,18 +67,34 @@ def validate_target_url(url: str) -> str | None:
     if not hostname:
         return "URL must have a hostname."
 
-    # Check for private/loopback IPs
+    if hostname in ("localhost", "localhost.localdomain"):
+        return "localhost not allowed as target."
+
     try:
         ip = ipaddress.ip_address(hostname)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
-            return f"Private/loopback IP not allowed: {ip}"
-        # Block cloud metadata endpoint
-        if str(ip) == "169.254.169.254":
-            return "Cloud metadata endpoint not allowed."
     except ValueError:
-        # Not an IP address - it's a domain name, check for localhost
-        if hostname in ("localhost", "localhost.localdomain"):
-            return "localhost not allowed as target."
+        ip = None
+
+    if ip is not None:
+        reason = _classify_unsafe_ip(ip)
+        if reason:
+            return reason.capitalize()
+        return None
+
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        return f"Could not resolve hostname {hostname!r}: {e}"
+
+    for info in infos:
+        addr = info[4][0]
+        try:
+            resolved = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        reason = _classify_unsafe_ip(resolved)
+        if reason:
+            return f"{hostname} resolves to unsafe address: {reason}"
 
     return None
 
