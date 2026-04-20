@@ -20,6 +20,7 @@ from nostrax.extractor import extract_urls
 from nostrax.metrics import MetricsSink, NullMetricsSink
 from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
+from nostrax.protocols import Extractor, Fetcher
 from nostrax.resolver import SafeResolver
 from nostrax.robots import RobotsChecker
 from nostrax.sitemap import fetch_sitemap
@@ -230,6 +231,8 @@ async def crawl_async(
     cache_dir: str | None = None,
     check_status: bool = False,
     metrics: MetricsSink | None = None,
+    fetcher: Fetcher | None = None,
+    extractor: Extractor | None = None,
 ) -> list[str] | list[UrlResult]:
     """Crawl a URL and optionally follow links concurrently.
 
@@ -267,6 +270,10 @@ async def crawl_async(
         )
     if metrics is None:
         metrics = NullMetricsSink()
+    if fetcher is None:
+        fetcher = fetch_page
+    if extractor is None:
+        extractor = extract_urls
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
     rate_limiter = PerHostRateLimiter(rate_limit)
@@ -380,7 +387,7 @@ async def crawl_async(
                 await rate_limiter.wait(urlparse(current_url).netloc)
 
                 logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
-                html, resp_time = await fetch_page(
+                html, resp_time = await fetcher(
                     session, current_url,
                     timeout=timeout,
                     max_response_size=max_response_size,
@@ -397,7 +404,7 @@ async def crawl_async(
                 found = await loop.run_in_executor(
                     None,
                     partial(
-                        extract_urls, html, current_url,
+                        extractor, html, current_url,
                         tags=tags, deduplicate=False,
                         include_metadata=True, depth=current_depth,
                     ),
@@ -529,6 +536,8 @@ def crawl(
     cache_dir: str | None = None,
     check_status: bool = False,
     metrics: MetricsSink | None = None,
+    fetcher: Fetcher | None = None,
+    extractor: Extractor | None = None,
 ) -> list[str] | list[UrlResult]:
     """Synchronous wrapper around crawl_async for simple usage."""
     return asyncio.run(
@@ -556,5 +565,7 @@ def crawl(
             cache_dir=cache_dir,
             check_status=check_status,
             metrics=metrics,
+            fetcher=fetcher,
+            extractor=extractor,
         )
     )
