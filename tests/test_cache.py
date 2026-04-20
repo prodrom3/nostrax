@@ -68,6 +68,42 @@ def test_cache_empty_load(tmp_path, monkeypatch):
     assert cache.visited == set()
 
 
+def test_save_visited_is_atomic_no_tmp_left_behind(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    cache.mark_visited("https://example.com/a")
+    cache.save_visited()
+
+    assert os.path.isfile(str(tmp_path / "visited.json"))
+    assert not os.path.exists(str(tmp_path / "visited.json.tmp"))
+
+
+def test_save_visited_preserves_prior_file_if_rename_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+
+    cache.mark_visited("https://example.com/first")
+    cache.save_visited()
+
+    cache.mark_visited("https://example.com/second")
+    monkeypatch.setattr("os.replace", _boom)
+    import pytest
+    with pytest.raises(OSError):
+        cache.save_visited()
+
+    # Previous state must survive the failed rewrite.
+    reloaded = CrawlCache(str(tmp_path))
+    reloaded.initialize()
+    assert "https://example.com/first" in reloaded.visited
+    assert "https://example.com/second" not in reloaded.visited
+
+
+def _boom(*args, **kwargs):
+    raise OSError("simulated rename failure")
+
+
 def test_cache_rejects_path_traversal(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import pytest

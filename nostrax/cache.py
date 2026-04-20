@@ -59,9 +59,18 @@ class CrawlCache:
             f.write(json.dumps(result.to_dict()) + "\n")
 
     def save_visited(self) -> None:
-        """Persist the full visited set to disk."""
-        with open(self._visited_path, "w", encoding="utf-8") as f:
+        """Persist the full visited set to disk atomically.
+
+        Writes to a sibling .tmp file, fsyncs, then renames into place.
+        A crash mid-write leaves either the previous file intact or the
+        fully-written new file, never a truncated target.
+        """
+        tmp_path = self._visited_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(list(self._visited), f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self._visited_path)
 
     def load_results(self) -> list[UrlResult]:
         """Load previously saved results from disk."""
