@@ -90,6 +90,8 @@ class CrawlCache:
                         source=d.get("source", ""),
                         tag=d.get("tag", ""),
                         depth=d.get("depth", 0),
+                        status=d.get("status"),
+                        response_time=d.get("response_time_ms"),
                     ))
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning("Skipping corrupt cache line: %s", e)

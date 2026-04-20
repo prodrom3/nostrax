@@ -43,6 +43,28 @@ def test_cache_save_and_load_results(tmp_path, monkeypatch):
     assert results[1].tag == "img"
 
 
+def test_cache_round_trip_preserves_status_and_response_time(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+
+    cache.save_result(UrlResult(
+        url="https://example.com/a",
+        status=200,
+        response_time=142.3,
+    ))
+    cache.save_result(UrlResult(
+        url="https://example.com/b",
+        status=404,
+    ))
+
+    results = cache.load_results()
+    assert results[0].status == 200
+    assert results[0].response_time == 142.3
+    assert results[1].status == 404
+    assert results[1].response_time is None
+
+
 def test_cache_clear(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache = CrawlCache(str(tmp_path))
