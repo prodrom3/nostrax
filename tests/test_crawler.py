@@ -186,8 +186,10 @@ def test_crawl_deduplicates():
         assert urls.count("https://example.com/same") == 1
 
 
-def test_crawl_fetch_failure():
+def test_crawl_raises_fetch_error_when_start_unreachable():
     import aiohttp as aio
+
+    from nostrax.exceptions import FetchError
 
     with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
         mock_session = AsyncMock()
@@ -195,8 +197,9 @@ def test_crawl_fetch_failure():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        urls = crawl("https://example.com")
-        assert urls == []
+        with pytest.raises(FetchError) as exc_info:
+            crawl("https://example.com")
+        assert exc_info.value.url == "https://example.com"
 
 
 def test_crawl_with_metadata():

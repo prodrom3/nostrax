@@ -14,6 +14,7 @@ import sys
 from nostrax import __version__
 from nostrax.config import load_config, merge_config, user_provided_attrs
 from nostrax.crawler import crawl_async
+from nostrax.exceptions import NostraxError
 from nostrax.extractor import TAG_ATTRS
 from nostrax.validation import (
     validate_header_value,
@@ -343,6 +344,9 @@ def main(argv: list[str] | None = None) -> int:
                 cache_dir=args.cache_dir,
             )
         )
+    except NostraxError as e:
+        logging.getLogger(__name__).error("%s", e)
+        return 1
     finally:
         if pbar is not None:
             pbar.close()

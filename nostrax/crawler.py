@@ -17,6 +17,7 @@ from urllib.parse import urlparse, urljoin
 import aiohttp
 
 from nostrax.cache import CrawlCache
+from nostrax.exceptions import FetchError
 from nostrax.extractor import extract_urls
 from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
@@ -173,6 +174,7 @@ async def crawl_async(
 
     # Cache/resume support
     cache = None
+    had_cached_results = False
     if cache_dir:
         cache = CrawlCache(cache_dir)
         cache.initialize()
@@ -180,6 +182,7 @@ async def crawl_async(
         cached_results = cache.load_results()
         if cached_results:
             all_results.extend(cached_results)
+            had_cached_results = True
             logger.info("Resumed with %d cached results", len(cached_results))
 
     basic_auth = aiohttp.BasicAuth(auth[0], auth[1]) if auth else None
@@ -364,6 +367,13 @@ async def crawl_async(
     # Save final visited state
     if cache:
         cache.save_visited()
+
+    if pages_crawled == 0 and not had_cached_results:
+        raise FetchError(
+            url,
+            "no pages were successfully fetched; check connectivity, "
+            "robots.txt, and logs for details",
+        )
 
     if deduplicate:
         seen: set[str] = set()
