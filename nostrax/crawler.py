@@ -126,7 +126,7 @@ async def crawl_async(
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
-    progress_callback: object | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
     retries: int = DEFAULT_RETRIES,
     scope: str | None = None,
     strategy: str = "dfs",
