@@ -75,13 +75,38 @@ def test_filter_pattern_invalid_regex():
 
 
 def test_filter_pattern_safe_against_backtracking():
-    # Catastrophic-backtracking pattern. Input length is bounded so the
-    # test completes in a few hundred ms on CPython 3.14+, which no longer
-    # raises RecursionError for this class of backtracking. The filter
-    # still needs a real timeout-based ReDoS guard; tracked separately.
-    urls = ["https://example.com/" + "a" * 20]
+    # The `regex` package's engine handles this class of pattern without
+    # catastrophic backtracking in the first place, so even a large input
+    # returns quickly rather than pinning a CPU core.
+    urls = ["https://example.com/" + "a" * 1000]
     result = filter_by_pattern(urls, r"(a+)+b")
-    assert isinstance(result, list)
+    assert result == []
+
+
+def test_filter_pattern_timeout_is_bounded(monkeypatch):
+    """A match that would actually exceed the per-URL budget is skipped
+    rather than allowed to hang the process."""
+    import nostrax.filters as filters_mod
+
+    # Force a tiny budget so a normal compile path still runs but any real
+    # match attempt fails the timeout immediately.
+    monkeypatch.setattr(filters_mod, "_REGEX_TIMEOUT_SECONDS", 1e-9)
+
+    urls = ["https://example.com/" + "a" * 200]
+    result = filters_mod.filter_by_pattern(urls, r"(?:a|aa)*b")
+    assert result == []
+
+
+def test_filter_exclude_timeout_is_bounded(monkeypatch):
+    import nostrax.filters as filters_mod
+
+    monkeypatch.setattr(filters_mod, "_REGEX_TIMEOUT_SECONDS", 1e-9)
+
+    urls = ["https://example.com/" + "a" * 200]
+    # exclude matching a timing-out pattern: the URL is dropped because
+    # the matcher couldn't definitively say it doesn't match within budget.
+    result = filters_mod.filter_by_exclude(urls, r"(?:a|aa)*b")
+    assert result == []
 
 
 def test_filter_exclude_removes_matches():

@@ -21,6 +21,7 @@ dependencies = [
     "defusedxml>=0.7",
     "lxml>=5.0",
     "packaging>=23.0",
+    "regex>=2024.0",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
