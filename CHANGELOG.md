@@ -64,7 +64,10 @@ are included in the first 2.0.0 artifact.
   (never lowered below an explicit `--rate-limit`). Fractional delays
   like `Crawl-delay: 0.5` are supported, which stdlib's parser silently
   drops.
-- Ruff lint gate in CI (`[tool.ruff]` config + a dedicated `lint` job).
+- Ruff lint gate in CI (`[tool.ruff]` config + a dedicated `lint` job),
+  plus a `ruff format --check` gate. The codebase was formatted with
+  `ruff format`; that bulk commit is listed in `.git-blame-ignore-revs`
+  so `git blame` skips it.
 - Richer packaging metadata in `pyproject.toml`: trove classifiers,
   `project.urls` (Homepage/Repository/Issues/Changelog), and keywords.
 
