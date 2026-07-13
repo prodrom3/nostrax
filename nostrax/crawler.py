@@ -19,6 +19,7 @@ from urllib.parse import urlparse, urljoin
 import aiohttp
 
 from nostrax.cache import CrawlCache
+from nostrax.content import PageContent, extract_content
 from nostrax.exceptions import FetchError, NostraxError
 from nostrax.extractor import extract_urls
 from nostrax.metrics import MetricsSink, NullMetricsSink
@@ -395,6 +396,7 @@ async def crawl_async(
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
+    collect_content: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
     retries: int = DEFAULT_RETRIES,
     scope: str | None = None,
@@ -404,7 +406,7 @@ async def crawl_async(
     metrics: MetricsSink | None = None,
     fetcher: Fetcher | None = None,
     extractor: Extractor | None = None,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Crawl a URL and optionally follow links concurrently.
 
     Args:
@@ -433,6 +435,10 @@ async def crawl_async(
         auth: Tuple of (username, password) for HTTP basic auth.
         use_sitemap: Also parse sitemap.xml for URLs.
         include_metadata: Return UrlResult objects instead of plain strings.
+        collect_content: Extract page metadata (title, description, canonical,
+            language, Open Graph, JSON-LD) for each crawled page and return a
+            list of PageContent instead of URL results. Links are still
+            followed so ``depth`` works.
         progress_callback: Called with (pages_crawled, urls_found) after each page.
         retries: Number of retry attempts for failed requests.
         scope: URL path prefix to restrict crawling to (e.g. "/docs/").
@@ -491,6 +497,7 @@ async def crawl_async(
     completed: set[str] = set()
     pending: dict[str, tuple[str, int]] = {}
     all_results: list[UrlResult] = []
+    page_contents: list[PageContent] = []
     semaphore = asyncio.Semaphore(max_concurrent)
     robots = RobotsChecker(user_agent) if respect_robots else None
     loop = asyncio.get_running_loop()
@@ -742,6 +749,19 @@ async def crawl_async(
                     for r in found:
                         cache.save_result(r)
 
+                if collect_content:
+                    page_contents.append(
+                        await loop.run_in_executor(
+                            None,
+                            partial(
+                                extract_content,
+                                html,
+                                current_url,
+                                depth=current_depth,
+                            ),
+                        )
+                    )
+
                 pages_crawled += 1
                 if progress_callback is not None:
                     progress_callback(pages_crawled, len(all_results))
@@ -824,6 +844,17 @@ async def crawl_async(
             "robots.txt, and logs for details",
         )
 
+    if collect_content:
+        if deduplicate:
+            seen_pages: set[str] = set()
+            unique_pages: list[PageContent] = []
+            for pc in page_contents:
+                if pc.url not in seen_pages:
+                    seen_pages.add(pc.url)
+                    unique_pages.append(pc)
+            page_contents = unique_pages
+        return page_contents
+
     if deduplicate:
         seen: set[str] = set()
         unique: list[UrlResult] = []
@@ -861,6 +892,7 @@ def crawl(
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
+    collect_content: bool = False,
     retries: int = DEFAULT_RETRIES,
     scope: str | None = None,
     strategy: str = "dfs",
@@ -869,7 +901,7 @@ def crawl(
     metrics: MetricsSink | None = None,
     fetcher: Fetcher | None = None,
     extractor: Extractor | None = None,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Synchronous wrapper around crawl_async for simple usage."""
     return asyncio.run(
         crawl_async(
@@ -893,6 +925,7 @@ def crawl(
             auth=auth,
             use_sitemap=use_sitemap,
             include_metadata=include_metadata,
+            collect_content=collect_content,
             retries=retries,
             scope=scope,
             strategy=strategy,
@@ -911,14 +944,15 @@ async def crawl_seeds_async(
     deduplicate: bool = True,
     include_metadata: bool = False,
     **kwargs: Any,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Crawl several seed URLs and return the merged, de-duplicated results.
 
     Each seed is crawled independently with :func:`crawl_async` - its own
     base domain, scope, and robots.txt - so seeds may span different sites.
     A seed that fails to fetch is logged and skipped rather than aborting
     the whole batch; the call raises :class:`FetchError` only when *every*
-    seed fails. Results are de-duplicated across seeds by normalized URL.
+    seed fails. Results are de-duplicated across seeds by URL. With
+    ``collect_content=True`` the merged list is of PageContent.
 
     ``cache_dir`` is not supported here: resume is a single-target concept,
     and a shared visited/frontier set across seeds would double-count
@@ -932,7 +966,10 @@ async def crawl_seeds_async(
             "cache_dir is not supported with multiple seeds; crawl a single target to use resume"
         )
 
-    merged: list[UrlResult] = []
+    collect_content = bool(kwargs.get("collect_content"))
+    # Both UrlResult and PageContent expose ``.url``, so the merge and
+    # de-dup below are identical for the two modes.
+    merged: list = []
     failures = 0
     for seed in seeds:
         try:
@@ -941,8 +978,7 @@ async def crawl_seeds_async(
             logger.warning("Skipping seed %s: %s", seed, e)
             failures += 1
             continue
-        # include_metadata=True above guarantees UrlResult items.
-        merged.extend(cast("list[UrlResult]", results))
+        merged.extend(results)
 
     if failures == len(seeds):
         raise FetchError(
@@ -952,15 +988,15 @@ async def crawl_seeds_async(
 
     if deduplicate:
         seen: set[str] = set()
-        unique: list[UrlResult] = []
+        unique: list = []
         for r in merged:
-            norm = normalize_url(r.url)
-            if norm not in seen:
-                seen.add(norm)
+            key = r.url if collect_content else normalize_url(r.url)
+            if key not in seen:
+                seen.add(key)
                 unique.append(r)
         merged = unique
 
-    if include_metadata:
+    if collect_content or include_metadata:
         return merged
     return [r.url for r in merged]
 
@@ -971,7 +1007,7 @@ def crawl_seeds(
     deduplicate: bool = True,
     include_metadata: bool = False,
     **kwargs: Any,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Synchronous wrapper around :func:`crawl_seeds_async`."""
     return asyncio.run(
         crawl_seeds_async(

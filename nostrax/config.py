@@ -58,6 +58,7 @@ BOOL_KEYS: set[str] = {
     "metadata",
     "progress",
     "auto_throttle",
+    "content",
 }
 
 

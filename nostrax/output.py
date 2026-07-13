@@ -11,10 +11,13 @@ import logging
 import os
 import sys
 from dataclasses import replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from nostrax.models import UrlResult
 from nostrax.validation import is_path_within
+
+if TYPE_CHECKING:
+    from nostrax.content import PageContent
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +115,48 @@ def format_urls(
 
     else:
         raise ValueError(f"Unknown format: {fmt!r}")
+
+
+def format_content(pages: "list[PageContent]", fmt: str = "plain") -> str:
+    """Format scraped page content as plain, json, jsonl, or csv."""
+    if fmt == "json":
+        return json.dumps([p.to_dict() for p in pages], indent=2)
+    if fmt == "jsonl":
+        return "\n".join(json.dumps(p.to_dict()) for p in pages)
+    if fmt == "csv":
+        buf = io.StringIO()
+        fields = ["url", "title", "description", "canonical", "lang", "keywords", "robots"]
+        writer = csv.DictWriter(buf, fieldnames=fields)
+        writer.writeheader()
+        for p in pages:
+            writer.writerow({f: getattr(p, f) for f in fields})
+        return buf.getvalue().rstrip("\n")
+    if fmt == "plain":
+        lines = []
+        for p in pages:
+            lines.append(f"{p.url}\t{p.title}" if p.title else p.url)
+        return "\n".join(lines)
+    raise ValueError(f"Unsupported content format: {fmt!r}")
+
+
+def write_content_output(
+    pages: "list[PageContent]",
+    fmt: str = "plain",
+    output_file: str | None = None,
+) -> None:
+    """Format scraped page content and write to stdout or a cwd-confined file."""
+    formatted = format_content(pages, fmt)
+    if not formatted:
+        return
+    if output_file:
+        output_path = os.path.realpath(output_file)
+        if not is_path_within(output_path, os.getcwd()):
+            logger.error("Refusing to write outside working directory: %s", output_file)
+            return
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(formatted + "\n")
+    else:
+        sys.stdout.write(formatted + "\n")
 
 
 def write_output(

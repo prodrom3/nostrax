@@ -491,6 +491,30 @@ def test_crawl_rotates_proxy_pool_across_fetches():
     assert used_proxies[0] != used_proxies[1]  # actually alternating
 
 
+def test_crawl_collect_content_returns_page_content():
+    from nostrax.content import PageContent
+
+    pages = {
+        "https://c.test": (
+            "<html lang=en><head><title>Home</title>"
+            '<meta name=description content="the home page">'
+            '</head><body><a href="https://c.test/2">2</a></body></html>'
+        ),
+        "https://c.test/2": ("<html><head><title>Page Two</title></head><body>leaf</body></html>"),
+    }
+
+    async def fake_fetch(session, url, **kw):
+        return (pages.get(url.rstrip("/")), 1.0)
+
+    results = crawl("https://c.test", depth=1, fetcher=fake_fetch, collect_content=True)
+    assert all(isinstance(r, PageContent) for r in results)
+    by_url = {r.url: r for r in results}
+    assert by_url["https://c.test"].title == "Home"
+    assert by_url["https://c.test"].description == "the home page"
+    assert by_url["https://c.test"].lang == "en"
+    assert by_url["https://c.test/2"].title == "Page Two"
+
+
 def test_crawl_auto_throttle_runs():
     """Smoke: auto_throttle uses the adaptive limiter without breaking a crawl."""
     pages = {
