@@ -8,9 +8,10 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/prodrom3/nostrax)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Lint & format: ruff](https://img.shields.io/badge/lint%20%26%20format-ruff-261230.svg)](https://github.com/astral-sh/ruff)
+[![Typed: mypy](https://img.shields.io/badge/typed-mypy-blue.svg)](https://mypy-lang.org/)
 [![Async](https://img.shields.io/badge/async-aiohttp-blue.svg)](https://docs.aiohttp.org/)
-[![Tests](https://img.shields.io/badge/tests-250%2B-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-280%2B-brightgreen.svg)](tests/)
 [![SemVer](https://img.shields.io/badge/semver-2.0.0-blue.svg)](https://semver.org/)
 
 <img width="360" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a">
@@ -118,11 +119,11 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 | Component | Supported |
 |---|---|
-| Python | 3.10, 3.11, 3.12, 3.13 |
+| Python | 3.10, 3.11, 3.12, 3.13, 3.14 |
 | Operating systems | Linux, macOS, Windows |
 | Architectures | x86_64, arm64 |
-| Runtime dependencies | `aiohttp >= 3.9`, `beautifulsoup4 >= 4.12`, `lxml >= 5.0` |
-| Optional dependencies | `tqdm >= 4.60` (progress bar) |
+| Runtime dependencies | `aiohttp >= 3.9`, `beautifulsoup4 >= 4.12`, `lxml >= 5.0`, `defusedxml >= 0.7`, `regex >= 2024.0`, `packaging >= 23.0` |
+| Optional dependencies | `tqdm` (progress bar, `[progress]`); `playwright` (JS rendering, `[playwright]`) |
 | Network | Outbound HTTP/HTTPS to target hosts; HTTP/HTTPS/SOCKS4/SOCKS5 proxy support |
 | Packaging | PEP 517 / PEP 621 (`pyproject.toml`), installs via `pip` or any PEP 517 frontend |
 
@@ -673,17 +674,21 @@ This project is maintained on a best-effort basis by the authors and community c
 
 ```bash
 pip install -e ".[dev]"
-pytest                            # 150+ tests across 16 modules
-pytest --cov=nostrax              # With coverage
-pytest tests/test_crawler.py      # Single module
+pytest                            # 280+ tests across the suite
+pytest --cov=nostrax              # with coverage (CI gates at 85%)
+pytest tests/test_crawler.py      # single module
 ```
 
-Tests use `pytest`, `pytest-asyncio`, `pytest-cov`, and `aioresponses` - all declared in the `dev` optional dependency group. The suite covers crawling, extraction, filtering, normalization, sitemap parsing, robots compliance, cache resume, CLI argument parsing, input validation (SSRF, path traversal, header injection, ReDoS), and output formatting.
+Tests use `pytest`, `pytest-asyncio`, `pytest-cov`, and `aioresponses` - all declared in the `dev` optional dependency group. The suite covers crawling, extraction, content scraping, incremental recrawl, filtering, normalization, sitemap parsing, robots compliance, cache resume, CLI argument parsing, input validation (SSRF, path traversal, header injection, ReDoS), and output formatting.
 
-### Code style
+### Lint, format, and type-check
+
+CI enforces all three; run them locally before opening a PR:
 
 ```bash
-black nostrax tests               # Format
+ruff check nostrax tests examples       # lint
+ruff format --check nostrax tests       # formatting (ruff format applies it)
+mypy                                    # type-check (config in pyproject.toml)
 ```
 
 ### Contributing
@@ -692,7 +697,7 @@ Contributions are welcome. Please:
 
 1. Fork the repository and create a feature branch (`feature/my-feature`).
 2. Add or update tests for your change - new code is expected to keep coverage steady or improve it.
-3. Run `pytest` and `black nostrax tests` before opening a pull request.
+3. Run `pytest`, `ruff check`, `ruff format --check`, and `mypy` before opening a pull request.
 4. Keep commits focused; prefer small, reviewable PRs over large ones.
 5. Sign off or otherwise indicate you have the right to contribute the code under the MIT License.
 
