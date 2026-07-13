@@ -59,6 +59,7 @@ BOOL_KEYS: set[str] = {
     "progress",
     "auto_throttle",
     "content",
+    "incremental",
 }
 
 

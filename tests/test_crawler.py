@@ -515,6 +515,73 @@ def test_crawl_collect_content_returns_page_content():
     assert by_url["https://c.test/2"].title == "Page Two"
 
 
+def test_incremental_recrawl_reuses_unchanged_via_304(tmp_path, monkeypatch):
+    """First crawl stores ETags; the second sends conditional requests, gets
+    304 for unchanged pages, and reuses their links to keep traversing -
+    without re-downloading anything."""
+    monkeypatch.chdir(tmp_path)
+    cache_dir = str(tmp_path / "c")
+    home = "<html><body><a href='https://i.test/a'>a</a></body></html>"
+    page_a = "<html><body>leaf</body></html>"
+    etags = {"https://i.test": '"home1"', "https://i.test/a": '"a1"'}
+    fetch_log: list[tuple[str, str]] = []
+
+    def get_side_effect(url, **kwargs):
+        u = url.rstrip("/")
+        inm = (kwargs.get("headers") or {}).get("If-None-Match")
+        if inm and inm == etags.get(u):
+            fetch_log.append(("304", u))
+            return _make_mock_response("", status=304)
+        fetch_log.append(("200", u))
+        body = home if u == "https://i.test" else page_a
+        return _make_mock_response(body, status=200, headers={"ETag": etags[u]})
+
+    def run():
+        with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
+            sess = AsyncMock()
+            sess.get = MagicMock(side_effect=get_side_effect)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=sess)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            return crawl(
+                "https://i.test",
+                depth=1,
+                cache_dir=cache_dir,
+                incremental=True,
+                include_metadata=True,
+            )
+
+    r1 = run()
+    assert "https://i.test/a" in {r.url for r in r1}
+    assert all(status == "200" for status, _ in fetch_log)  # first pass downloads
+
+    fetch_log.clear()
+    r2 = run()
+    # /a is still discovered - via the reused links of the 304'd home page.
+    assert "https://i.test/a" in {r.url for r in r2}
+    assert len(fetch_log) == 2
+    assert all(status == "304" for status, _ in fetch_log)  # nothing re-downloaded
+
+
+def test_incremental_requires_cache_dir():
+    with pytest.raises(ValueError):
+        crawl("https://i.test", incremental=True)
+
+
+def test_incremental_rejects_custom_fetcher(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    async def fake_fetch(session, url, **kw):
+        return ("<html></html>", 1.0)
+
+    with pytest.raises(ValueError):
+        crawl(
+            "https://i.test",
+            cache_dir=str(tmp_path / "c"),
+            incremental=True,
+            fetcher=fake_fetch,
+        )
+
+
 def test_crawl_auto_throttle_runs():
     """Smoke: auto_throttle uses the adaptive limiter without breaking a crawl."""
     pages = {

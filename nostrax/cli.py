@@ -276,6 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to cache crawl state for resume support",
     )
     parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Re-crawl using stored ETag/Last-Modified validators so unchanged "
+        "pages return 304 and are reused from cache (requires --cache-dir)",
+    )
+    parser.add_argument(
         "--no-config",
         action="store_true",
         help="Ignore .nostraxrc config file",
@@ -395,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--auto-throttle-max-delay must be > 0")
     if args.content and args.format in ("html", "dot", "graphml"):
         parser.error("--content supports only plain, json, jsonl, or csv output")
+    if args.incremental and not args.cache_dir:
+        parser.error("--incremental requires --cache-dir")
     if args.depth < 0:
         parser.error("--depth must be >= 0")
     if args.timeout <= 0:
@@ -489,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                     seeds[0],
                     progress_callback=progress_callback,
                     cache_dir=args.cache_dir,
+                    incremental=args.incremental,
                     **crawl_kwargs,
                 )
             )

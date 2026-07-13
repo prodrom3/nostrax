@@ -60,6 +60,36 @@ def test_cache_clear_removes_frontier(tmp_path, monkeypatch):
     assert cache.load_frontier() == []
 
 
+def test_cache_save_and_load_incremental(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    store = {
+        "https://example.com/": {
+            "url": "https://example.com/",
+            "etag": '"v1"',
+            "last_modified": None,
+            "hash": "abc",
+            "depth": 0,
+            "links": [{"url": "https://example.com/a", "tag": "a"}],
+        }
+    }
+    cache.save_incremental(store)
+
+    cache2 = CrawlCache(str(tmp_path))
+    cache2.initialize()
+    loaded = cache2.load_incremental()
+    assert loaded["https://example.com/"]["etag"] == '"v1"'
+    assert loaded["https://example.com/"]["links"][0]["url"] == "https://example.com/a"
+
+
+def test_cache_load_incremental_missing_is_empty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    assert cache.load_incremental() == {}
+
+
 def test_cache_save_and_load_results(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache = CrawlCache(str(tmp_path))
