@@ -40,9 +40,7 @@ class CrawlCache:
             try:
                 with open(self._visited_path, encoding="utf-8") as f:
                     self._visited = set(json.load(f))
-                logger.info(
-                    "Resuming crawl: %d URLs already visited", len(self._visited)
-                )
+                logger.info("Resuming crawl: %d URLs already visited", len(self._visited))
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("Could not load visited cache: %s", e)
                 self._visited = set()
@@ -69,9 +67,7 @@ class CrawlCache:
         provided only for the visited-set rewrite in :meth:`save_visited`.
         """
         if self._results_fh is None:
-            raise RuntimeError(
-                "CrawlCache.save_result called before initialize() or after close()"
-            )
+            raise RuntimeError("CrawlCache.save_result called before initialize() or after close()")
         self._results_fh.write(json.dumps(result.to_dict()) + "\n")
         self._results_fh.flush()
 
@@ -134,14 +130,16 @@ class CrawlCache:
                     continue
                 try:
                     d = json.loads(line)
-                    results.append(UrlResult(
-                        url=d["url"],
-                        source=d.get("source", ""),
-                        tag=d.get("tag", ""),
-                        depth=d.get("depth", 0),
-                        status=d.get("status"),
-                        response_time=d.get("response_time_ms"),
-                    ))
+                    results.append(
+                        UrlResult(
+                            url=d["url"],
+                            source=d.get("source", ""),
+                            tag=d.get("tag", ""),
+                            depth=d.get("depth", 0),
+                            status=d.get("status"),
+                            response_time=d.get("response_time_ms"),
+                        )
+                    )
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning("Skipping corrupt cache line: %s", e)
         return results

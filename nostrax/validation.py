@@ -52,6 +52,7 @@ def redact_credentials(url: str | None) -> str:
         (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
     )
 
+
 _UnsafeIP = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 

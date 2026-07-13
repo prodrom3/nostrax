@@ -56,15 +56,12 @@ class SafeResolver(AbstractResolver):
                 continue
             reason = _classify_unsafe_ip(ip)
             if reason is not None:
-                logger.warning(
-                    "SafeResolver: refusing %s -> %s (%s)", host, addr, reason
-                )
+                logger.warning("SafeResolver: refusing %s -> %s (%s)", host, addr, reason)
                 continue
             safe.append(info)
         if not safe:
             raise OSError(
-                f"Refused to connect to {host!r}: "
-                f"all resolved addresses are unsafe SSRF targets"
+                f"Refused to connect to {host!r}: all resolved addresses are unsafe SSRF targets"
             )
         return safe
 

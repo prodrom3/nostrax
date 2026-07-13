@@ -87,7 +87,8 @@ async def fetch_sitemap(
             if len(body) > MAX_SITEMAP_SIZE:
                 logger.warning(
                     "Sitemap %s exceeds %d bytes, skipping",
-                    url, MAX_SITEMAP_SIZE,
+                    url,
+                    MAX_SITEMAP_SIZE,
                 )
                 return []
             text = body.decode("utf-8", errors="replace")
@@ -106,7 +107,8 @@ async def fetch_sitemap(
             loc = sitemap.find(f"{SITEMAP_NS}loc")
             if loc is not None and loc.text:
                 child_urls = await fetch_sitemap(
-                    session, loc.text.strip(),
+                    session,
+                    loc.text.strip(),
                     timeout=timeout,
                     proxy=proxy,
                     connect_timeout=connect_timeout,

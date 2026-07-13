@@ -74,7 +74,7 @@ def _parse_meta_refresh(content: str) -> str | None:
     semi = content.find(";")
     if semi < 0:
         return None
-    rest = content[semi + 1:].strip()
+    rest = content[semi + 1 :].strip()
     # Accept "url=x", "URL = x", "url =x" - browsers tolerate whitespace
     # around the '=' and any case for the "url" key.
     if rest[:3].lower() != "url":
@@ -179,12 +179,14 @@ def extract_urls(
                     continue
                 seen.add(absolute_url)
 
-            results.append(UrlResult(
-                url=absolute_url,
-                source=base_url,
-                tag=tag_name,
-                depth=depth,
-            ))
+            results.append(
+                UrlResult(
+                    url=absolute_url,
+                    source=base_url,
+                    tag=tag_name,
+                    depth=depth,
+                )
+            )
 
     if include_metadata:
         return results

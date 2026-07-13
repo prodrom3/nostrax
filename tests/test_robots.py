@@ -40,9 +40,7 @@ def _make_mock_response(text, status=200):
 async def test_robots_crawl_delay_parsed():
     checker = RobotsChecker("nostrax/1.0")
     mock_session = AsyncMock()
-    mock_session.get = MagicMock(
-        return_value=_make_mock_response(ROBOTS_TXT_WITH_DELAY)
-    )
+    mock_session.get = MagicMock(return_value=_make_mock_response(ROBOTS_TXT_WITH_DELAY))
 
     await checker.load(mock_session, "https://example.com/page")
     assert checker.crawl_delay() == 2.5
@@ -57,13 +55,7 @@ def test_robots_crawl_delay_none_when_not_loaded():
 async def test_robots_crawl_delay_prefers_specific_agent():
     """A named group's Crawl-delay wins over the wildcard group, and a
     fractional value (which stdlib's parser silently drops) is honoured."""
-    txt = (
-        "User-agent: *\n"
-        "Crawl-delay: 10\n"
-        "\n"
-        "User-agent: nostrax\n"
-        "Crawl-delay: 0.5\n"
-    )
+    txt = "User-agent: *\nCrawl-delay: 10\n\nUser-agent: nostrax\nCrawl-delay: 0.5\n"
     checker = RobotsChecker("nostrax/1.0")
     mock_session = AsyncMock()
     mock_session.get = MagicMock(return_value=_make_mock_response(txt))

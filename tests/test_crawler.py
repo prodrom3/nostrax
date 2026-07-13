@@ -98,9 +98,7 @@ async def test_fetch_page_forwards_proxy_to_session():
     mock_session = AsyncMock()
     mock_session.get = MagicMock(return_value=mock_resp)
 
-    await fetch_page(
-        mock_session, "https://example.com", proxy="http://proxy:8080"
-    )
+    await fetch_page(mock_session, "https://example.com", proxy="http://proxy:8080")
 
     _, kwargs = mock_session.get.call_args
     assert kwargs["proxy"] == "http://proxy:8080"
@@ -116,8 +114,11 @@ async def test_fetch_page_applies_separated_timeouts():
     mock_session.get = MagicMock(return_value=mock_resp)
 
     await fetch_page(
-        mock_session, "https://example.com",
-        timeout=30, connect_timeout=5, read_timeout=15,
+        mock_session,
+        "https://example.com",
+        timeout=30,
+        connect_timeout=5,
+        read_timeout=15,
     )
 
     _, kwargs = mock_session.get.call_args
@@ -178,6 +179,7 @@ async def test_fetch_page_does_not_retry_client_error_status(monkeypatch):
 @pytest.mark.asyncio
 async def test_fetch_page_retries_server_error_status(monkeypatch):
     """A 5xx is transient, so it is retried up to the retry budget."""
+
     async def fake_sleep(delay):
         return None
 
@@ -195,6 +197,7 @@ async def test_fetch_page_retries_server_error_status(monkeypatch):
 @pytest.mark.asyncio
 async def test_fetch_page_retries_429_rate_limited(monkeypatch):
     """429 Too Many Requests is retryable even though it is a 4xx."""
+
     async def fake_sleep(delay):
         return None
 
@@ -215,7 +218,9 @@ async def test_fetch_page_skips_large_content_length():
     mock_session = AsyncMock()
     mock_session.get = MagicMock(return_value=mock_resp)
 
-    html, resp_time = await fetch_page(mock_session, "https://example.com", max_response_size=10_000_000)
+    html, resp_time = await fetch_page(
+        mock_session, "https://example.com", max_response_size=10_000_000
+    )
     assert html is None
 
 
@@ -277,10 +282,7 @@ def test_crawl_honours_robots_crawl_delay():
 def test_crawl_discovers_sitemaps_from_robots():
     """--sitemap consults robots.txt Sitemap: directives, not just the
     conventional /sitemap.xml path."""
-    robots_txt = (
-        "User-agent: *\nDisallow:\n"
-        "Sitemap: https://example.com/custom-sitemap.xml\n"
-    )
+    robots_txt = "User-agent: *\nDisallow:\nSitemap: https://example.com/custom-sitemap.xml\n"
     custom_sitemap = (
         '<?xml version="1.0"?>'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -303,9 +305,7 @@ def test_crawl_discovers_sitemaps_from_robots():
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        results = crawl(
-            "https://example.com", use_sitemap=True, include_metadata=True
-        )
+        results = crawl("https://example.com", use_sitemap=True, include_metadata=True)
 
     urls = {r.url for r in results}
     assert "https://example.com/from-robots-sitemap" in urls
@@ -337,8 +337,11 @@ def test_resume_continues_interrupted_frontier(tmp_path, monkeypatch):
 
     # Run 1: /a fails, so /b is never discovered. /a must be persisted.
     crawl(
-        "https://site.test", depth=5, cache_dir=cache_dir,
-        include_metadata=True, fetcher=fake_fetch,
+        "https://site.test",
+        depth=5,
+        cache_dir=cache_dir,
+        include_metadata=True,
+        fetcher=fake_fetch,
     )
     frontier = json.load(open(os.path.join(cache_dir, "frontier.json")))
     assert ["https://site.test/a", 1] in frontier
@@ -347,8 +350,11 @@ def test_resume_continues_interrupted_frontier(tmp_path, monkeypatch):
     fail["urls"] = set()
     fetched.clear()
     r2 = crawl(
-        "https://site.test", depth=5, cache_dir=cache_dir,
-        include_metadata=True, fetcher=fake_fetch,
+        "https://site.test",
+        depth=5,
+        cache_dir=cache_dir,
+        include_metadata=True,
+        fetcher=fake_fetch,
     )
     got = {r.url for r in r2}
     assert "https://site.test/a" in fetched  # retried
@@ -370,7 +376,9 @@ def test_crawl_seeds_merges_across_domains_and_isolates_failures():
 
     res = crawl_seeds(
         ["https://a.test", "https://b.test", "https://dead.test"],
-        depth=2, include_metadata=True, fetcher=fake_fetch,
+        depth=2,
+        include_metadata=True,
+        fetcher=fake_fetch,
     )
     urls = {r.url for r in res}
     assert "https://a.test/1" in urls  # from seed 1's domain
@@ -438,7 +446,6 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache_dir = str(tmp_path / "cache")
 
-
     class Boom(Exception):
         pass
 
@@ -448,6 +455,7 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
             raising_get.calls += 1
             return _make_mock_response(SAMPLE_HTML)
         raise Boom("simulated interrupt")
+
     raising_get.calls = 0
 
     with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
@@ -457,11 +465,13 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
         import pytest
+
         with pytest.raises(Boom):
             crawl("https://example.com", depth=1, cache_dir=cache_dir)
 
     # The visited file must exist even though the crawl raised.
     import json
+
     visited_path = tmp_path / "cache" / "visited.json"
     assert visited_path.is_file(), "visited cache was not flushed on exception"
     visited = json.loads(visited_path.read_text())
@@ -481,9 +491,7 @@ def test_crawl_check_status_attaches_status_from_same_session():
     with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
         mock_session = AsyncMock()
         mock_session.get = MagicMock(return_value=_make_mock_response(SAMPLE_HTML))
-        mock_session.head = MagicMock(
-            return_value=_make_mock_response("", status=204)
-        )
+        mock_session.head = MagicMock(return_value=_make_mock_response("", status=204))
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -524,5 +532,6 @@ def test_crawl_with_metadata():
 
         results = crawl("https://example.com", include_metadata=True)
         from nostrax.models import UrlResult
+
         assert all(isinstance(r, UrlResult) for r in results)
         assert results[0].source == "https://example.com"

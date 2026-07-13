@@ -131,9 +131,7 @@ async def fetch_page(
 
                 # Check Content-Type before reading body
                 content_type = response.content_type or ""
-                if content_type and not any(
-                    ct in content_type for ct in _HTML_CONTENT_TYPES
-                ):
+                if content_type and not any(ct in content_type for ct in _HTML_CONTENT_TYPES):
                     logger.debug("Skipping non-HTML %s: %s", url, content_type)
                     return None, elapsed
 
@@ -145,16 +143,21 @@ async def fetch_page(
                 if status >= 400:
                     retryable = status in _RETRYABLE_STATUSES or 500 <= status < 600
                     if retryable and attempt < retries:
-                        delay = random.uniform(0, 2 ** attempt)
+                        delay = random.uniform(0, 2**attempt)
                         logger.debug(
                             "Retry %d/%d for %s after HTTP %d (waiting %.2fs)",
-                            attempt + 1, retries, url, status, delay,
+                            attempt + 1,
+                            retries,
+                            url,
+                            status,
+                            delay,
                         )
                         await asyncio.sleep(delay)
                         continue
                     logger.warning(
                         "HTTP %d for %s%s",
-                        status, url,
+                        status,
+                        url,
                         "" if retryable else " (client error, not retried)",
                     )
                     return None, elapsed
@@ -170,7 +173,8 @@ async def fetch_page(
                 if len(body) > max_response_size:
                     logger.warning(
                         "Skipping %s: response exceeded %d byte limit",
-                        url, max_response_size,
+                        url,
+                        max_response_size,
                     )
                     return None, elapsed
 
@@ -178,9 +182,7 @@ async def fetch_page(
                 # We avoid aiohttp's get_encoding() because it raises
                 # RuntimeError on a body read via .content.read() (no
                 # charset in header and no internal buffer to sniff).
-                text = body.decode(
-                    response.charset or "utf-8", errors="replace"
-                )
+                text = body.decode(response.charset or "utf-8", errors="replace")
                 return text, elapsed
 
         except (aiohttp.ClientError, TimeoutError) as e:
@@ -188,10 +190,15 @@ async def fetch_page(
             if attempt < retries:
                 # Full-jitter backoff (AWS Architecture Blog). Removes the
                 # lockstep retries that thunder a rate-limited target.
-                delay = random.uniform(0, 2 ** attempt)
+                delay = random.uniform(0, 2**attempt)
                 logger.debug(
                     "Retry %d/%d for %s after %.0fms (waiting %.2fs): %s",
-                    attempt + 1, retries, url, elapsed, delay, e,
+                    attempt + 1,
+                    retries,
+                    url,
+                    elapsed,
+                    delay,
+                    e,
                 )
                 await asyncio.sleep(delay)
             else:
@@ -223,7 +230,8 @@ async def _attach_statuses(
     async def _probe(r: UrlResult) -> None:
         async with semaphore:
             r.status = await check_url_status(
-                session, r.url,
+                session,
+                r.url,
                 timeout=timeout,
                 proxy=proxy,
                 connect_timeout=connect_timeout,
@@ -345,9 +353,7 @@ async def crawl_async(
             logger.info("Resumed with %d cached results", len(cached_results))
         resume_frontier = cache.load_frontier()
         if resume_frontier:
-            logger.info(
-                "Resuming with %d pending frontier URLs", len(resume_frontier)
-            )
+            logger.info("Resuming with %d pending frontier URLs", len(resume_frontier))
 
     basic_auth = aiohttp.BasicAuth(auth[0], auth[1]) if auth else None
 
@@ -371,7 +377,8 @@ async def crawl_async(
         ) as session:
             if robots:
                 await robots.load(
-                    session, url,
+                    session,
+                    url,
                     timeout=timeout,
                     proxy=proxy,
                     connect_timeout=connect_timeout,
@@ -382,9 +389,7 @@ async def crawl_async(
                 # --rate-limit still wins if it is stricter.
                 robots_delay = robots.crawl_delay()
                 if robots_delay and robots_delay > rate_limit:
-                    logger.info(
-                        "Honouring robots.txt Crawl-delay of %.1fs", robots_delay
-                    )
+                    logger.info("Honouring robots.txt Crawl-delay of %.1fs", robots_delay)
                     rate_limiter = PerHostRateLimiter(robots_delay)
 
             # Optionally fetch sitemaps: those advertised in robots.txt plus
@@ -396,7 +401,8 @@ async def crawl_async(
                 if sitemap_robots is None:
                     sitemap_robots = RobotsChecker(user_agent)
                     await sitemap_robots.load(
-                        session, url,
+                        session,
+                        url,
                         timeout=timeout,
                         proxy=proxy,
                         connect_timeout=connect_timeout,
@@ -412,7 +418,8 @@ async def crawl_async(
 
                 for sitemap_url in sitemap_targets:
                     sitemap_urls = await fetch_sitemap(
-                        session, sitemap_url,
+                        session,
+                        sitemap_url,
                         timeout=timeout,
                         proxy=proxy,
                         connect_timeout=connect_timeout,
@@ -420,9 +427,7 @@ async def crawl_async(
                     )
                     for su in sitemap_urls:
                         all_results.append(
-                            UrlResult(
-                                url=su, source=sitemap_url, tag="sitemap", depth=0
-                            )
+                            UrlResult(url=su, source=sitemap_url, tag="sitemap", depth=0)
                         )
 
             def _should_follow(link: str) -> bool:
@@ -496,9 +501,7 @@ async def crawl_async(
                     try:
                         metrics.on_robots_blocked(current_url)
                     except Exception as e:
-                        logger.warning(
-                            "metrics sink raised in on_robots_blocked: %s", e
-                        )
+                        logger.warning("metrics sink raised in on_robots_blocked: %s", e)
                     # Permanently skipped: record as done so a resume does
                     # not keep retrying a URL robots.txt will block again.
                     _mark_done(normalized)
@@ -508,7 +511,8 @@ async def crawl_async(
 
                 logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
                 html, resp_time = await fetcher(
-                    session, current_url,
+                    session,
+                    current_url,
                     timeout=timeout,
                     max_response_size=max_response_size,
                     retries=retries,
@@ -521,9 +525,7 @@ async def crawl_async(
                     try:
                         metrics.on_fetch_failed(current_url, current_depth)
                     except Exception as e:
-                        logger.warning(
-                            "metrics sink raised in on_fetch_failed: %s", e
-                        )
+                        logger.warning("metrics sink raised in on_fetch_failed: %s", e)
                     return
 
                 # Called with include_metadata=True, so the extractor returns
@@ -534,9 +536,13 @@ async def crawl_async(
                     await loop.run_in_executor(
                         None,
                         partial(
-                            extractor, html, current_url,
-                            tags=tags, deduplicate=False,
-                            include_metadata=True, depth=current_depth,
+                            extractor,
+                            html,
+                            current_url,
+                            tags=tags,
+                            deduplicate=False,
+                            include_metadata=True,
+                            depth=current_depth,
                         ),
                     ),
                 )
@@ -569,18 +575,12 @@ async def crawl_async(
                 if progress_callback is not None:
                     progress_callback(pages_crawled, len(all_results))
                 try:
-                    metrics.on_page_fetched(
-                        current_url, current_depth, resp_time, len(found)
-                    )
+                    metrics.on_page_fetched(current_url, current_depth, resp_time, len(found))
                 except Exception as e:
-                    logger.warning(
-                        "metrics sink raised in on_page_fetched: %s", e
-                    )
+                    logger.warning("metrics sink raised in on_page_fetched: %s", e)
 
                 if len(all_results) >= max_urls:
-                    logger.warning(
-                        "Reached max URL limit (%d), stopping crawl.", max_urls
-                    )
+                    logger.warning("Reached max URL limit (%d), stopping crawl.", max_urls)
                     return
 
                 if current_depth < depth:
@@ -604,9 +604,7 @@ async def crawl_async(
                             continue
                         await _process_one(current_url, current_depth)
                     except Exception as e:
-                        logger.error(
-                            "Worker failed on %s: %s", current_url, e, exc_info=True
-                        )
+                        logger.error("Worker failed on %s: %s", current_url, e, exc_info=True)
                         if first_error[0] is None:
                             first_error[0] = e
                     finally:
@@ -615,9 +613,7 @@ async def crawl_async(
             # Start the workers before seeding so that a large resume
             # frontier (which may exceed the queue's maxsize) drains as we
             # enqueue instead of dead-locking on a full queue.
-            workers = [
-                asyncio.create_task(_worker()) for _ in range(max_concurrent)
-            ]
+            workers = [asyncio.create_task(_worker()) for _ in range(max_concurrent)]
             try:
                 for f_url, f_depth in resume_frontier:
                     await _enqueue(f_url, f_depth)
@@ -633,7 +629,9 @@ async def crawl_async(
 
             if check_status and all_results:
                 await _attach_statuses(
-                    session, all_results, semaphore,
+                    session,
+                    all_results,
+                    semaphore,
                     timeout=timeout,
                     proxy=proxy,
                     connect_timeout=connect_timeout,
@@ -754,17 +752,14 @@ async def crawl_seeds_async(
         raise ValueError("no seed URLs provided")
     if kwargs.get("cache_dir"):
         raise ValueError(
-            "cache_dir is not supported with multiple seeds; crawl a single "
-            "target to use resume"
+            "cache_dir is not supported with multiple seeds; crawl a single target to use resume"
         )
 
     merged: list[UrlResult] = []
     failures = 0
     for seed in seeds:
         try:
-            results = await crawl_async(
-                seed, deduplicate=False, include_metadata=True, **kwargs
-            )
+            results = await crawl_async(seed, deduplicate=False, include_metadata=True, **kwargs)
         except NostraxError as e:
             logger.warning("Skipping seed %s: %s", seed, e)
             failures += 1

@@ -22,7 +22,7 @@ def test_dot_has_header_and_edges():
     assert '"https://example.com/a" -> "https://example.com/c";' in dot
     # sourceless node still appears, with no edge
     assert '"https://example.com/seed";' in dot
-    assert "-> \"https://example.com/seed\"" not in dot
+    assert '-> "https://example.com/seed"' not in dot
 
 
 def test_dot_escapes_quotes():

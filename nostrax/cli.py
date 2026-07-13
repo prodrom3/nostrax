@@ -38,7 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Extract URLs and paths from web pages.",
     )
     parser.add_argument(
-        "-V", "--version",
+        "-V",
+        "--version",
         action="version",
         version=f"nostrax {__version__}",
     )
@@ -48,7 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check PyPI for a newer version and exit",
     )
     parser.add_argument(
-        "-t", "--target",
+        "-t",
+        "--target",
         type=str,
         default=None,
         help="Target URL to extract from",
@@ -58,16 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Read seed URLs from a file, one per line ('-' for stdin; "
-             "blank lines and lines starting with # are ignored). Each seed "
-             "is crawled independently and the results are merged.",
+        "blank lines and lines starting with # are ignored). Each seed "
+        "is crawled independently and the results are merged.",
     )
     parser.add_argument(
-        "-s", "--silent",
+        "-s",
+        "--silent",
         action="store_true",
         help="Suppress all output (exit code only)",
     )
     parser.add_argument(
-        "-d", "--depth",
+        "-d",
+        "--depth",
         type=int,
         default=0,
         help="Recursion depth for crawling (default: 0, no recursion)",
@@ -114,15 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sort URLs alphabetically",
     )
     parser.add_argument(
-        "-f", "--format",
+        "-f",
+        "--format",
         type=str,
         choices=["plain", "json", "jsonl", "csv", "html", "dot", "graphml"],
         default="plain",
         help="Output format (default: plain). jsonl = one JSON record per "
-             "line; dot/graphml = source->url link graph.",
+        "line; dot/graphml = source->url link graph.",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=str,
         default=None,
         help="Write output to file instead of stdout",
@@ -152,7 +158,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Custom User-Agent string",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Enable verbose logging",
     )
@@ -386,9 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     # Formats that render a whole document (need the UrlResult metadata:
     # the graph formats need each result's source page to build edges).
     document_formats = {"html", "dot", "graphml"}
-    need_metadata = (
-        args.metadata or args.check_status or args.format in document_formats
-    )
+    need_metadata = args.metadata or args.check_status or args.format in document_formats
 
     # Crawl. crawl_async keywords are shared between the single-target and
     # multi-seed paths; only the seed source and cache/progress differ.
@@ -416,9 +421,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if len(seeds) > 1 or args.input_file:
             results = asyncio.run(
-                crawl_seeds_async(
-                    seeds, progress_callback=progress_callback, **crawl_kwargs
-                )
+                crawl_seeds_async(seeds, progress_callback=progress_callback, **crawl_kwargs)
             )
         else:
             results = asyncio.run(
@@ -507,9 +510,7 @@ def main(argv: list[str] | None = None) -> int:
             if not _write_document(content, args.output):
                 return 1
         else:
-            output_data: list[str] | list[UrlResult] = (
-                meta_results if need_metadata else url_list
-            )
+            output_data: list[str] | list[UrlResult] = meta_results if need_metadata else url_list
             write_output(
                 output_data,
                 fmt=args.format,

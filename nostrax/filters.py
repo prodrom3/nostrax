@@ -22,9 +22,7 @@ def _parse_urls(urls: list[str]) -> list[tuple[str, str, str]]:
     return [(u, p.scheme, p.netloc) for u, p in ((u, urlparse(u)) for u in urls)]
 
 
-def filter_by_domain(
-    urls: list[str], base_url: str, *, mode: str = "all"
-) -> list[str]:
+def filter_by_domain(urls: list[str], base_url: str, *, mode: str = "all") -> list[str]:
     """Filter URLs by domain relationship to base URL.
 
     Args:
@@ -72,9 +70,7 @@ def filter_by_pattern(urls: list[str], pattern: str) -> list[str]:
             if compiled.search(u, timeout=_REGEX_TIMEOUT_SECONDS):
                 safe.append(u)
         except TimeoutError:
-            logger.warning(
-                "Regex timed out on URL, skipping: %s (pattern=%r)", u, pattern
-            )
+            logger.warning("Regex timed out on URL, skipping: %s (pattern=%r)", u, pattern)
     return safe
 
 
@@ -95,7 +91,5 @@ def filter_by_exclude(urls: list[str], pattern: str) -> list[str]:
             if not compiled.search(u, timeout=_REGEX_TIMEOUT_SECONDS):
                 safe.append(u)
         except TimeoutError:
-            logger.warning(
-                "Regex timed out on URL, skipping: %s (pattern=%r)", u, pattern
-            )
+            logger.warning("Regex timed out on URL, skipping: %s (pattern=%r)", u, pattern)
     return safe

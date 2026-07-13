@@ -40,9 +40,11 @@ def test_is_path_within_rejects_sibling_prefix(tmp_path):
 
 def _fake_getaddrinfo(ip: str):
     """Build a getaddrinfo stub that always returns the given address."""
+
     def _stub(host, port, *args, **kwargs):
         family = socket.AF_INET6 if ":" in ip else socket.AF_INET
         return [(family, socket.SOCK_STREAM, 0, "", (ip, 0))]
+
     return _stub
 
 
@@ -112,9 +114,7 @@ def test_rejects_hostname_resolving_to_private_ip(monkeypatch):
 
 
 def test_rejects_hostname_resolving_to_metadata(monkeypatch):
-    monkeypatch.setattr(
-        socket, "getaddrinfo", _fake_getaddrinfo("169.254.169.254")
-    )
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("169.254.169.254"))
     err = validate_target_url("https://metadata.example/")
     assert err is not None
     assert "unsafe address" in err.lower()

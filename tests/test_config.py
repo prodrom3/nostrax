@@ -13,12 +13,12 @@ from nostrax.config import (
 def test_load_config_parses_toml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".nostraxrc").write_text(
-        '# comment\n'
-        'depth = 3\n'
-        'timeout = 30\n'
+        "# comment\n"
+        "depth = 3\n"
+        "timeout = 30\n"
         'user_agent = "mybot/1.0"\n'
-        'respect_robots = true\n'
-        'rate_limit = 0.5\n'
+        "respect_robots = true\n"
+        "rate_limit = 0.5\n"
     )
 
     result = load_config()
@@ -31,7 +31,10 @@ def test_load_config_parses_toml(tmp_path, monkeypatch):
 
 def test_merge_config_applies_when_user_did_not_provide_flag():
     args = argparse.Namespace(
-        depth=0, timeout=10, proxy=None, respect_robots=False,
+        depth=0,
+        timeout=10,
+        proxy=None,
+        respect_robots=False,
     )
     config = {
         "proxy": "http://proxy:8080",
@@ -69,9 +72,7 @@ def test_user_provided_attrs_detects_only_supplied_flags():
 
 def test_user_provided_attrs_handles_short_and_long_forms():
     parser = build_parser()
-    provided = user_provided_attrs(
-        parser, ["-t", "https://x", "-d", "2", "--format", "json"]
-    )
+    provided = user_provided_attrs(parser, ["-t", "https://x", "-d", "2", "--format", "json"])
     assert provided == {"target", "depth", "format"}
 
 

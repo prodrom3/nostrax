@@ -114,7 +114,8 @@ class RobotsChecker:
                 if len(body) > MAX_ROBOTS_SIZE:
                     logger.warning(
                         "robots.txt at %s exceeds %d bytes, ignoring",
-                        robots_url, MAX_ROBOTS_SIZE,
+                        robots_url,
+                        MAX_ROBOTS_SIZE,
                     )
                     self._loaded = False
                     return

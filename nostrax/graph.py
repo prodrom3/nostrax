@@ -73,15 +73,9 @@ def generate_graphml(results: list[UrlResult]) -> str:
         '  <graph edgedefault="directed">',
     ]
     for url, node_id in nodes.items():
-        out.append(
-            f'    <node id="{node_id}">'
-            f'<data key="url">{_html.escape(url)}</data></node>'
-        )
+        out.append(f'    <node id="{node_id}"><data key="url">{_html.escape(url)}</data></node>')
     for i, (source, target) in enumerate(edges):
-        out.append(
-            f'    <edge id="e{i}" source="{nodes[source]}" '
-            f'target="{nodes[target]}"/>'
-        )
+        out.append(f'    <edge id="e{i}" source="{nodes[source]}" target="{nodes[target]}"/>')
     out.append("  </graph>")
     out.append("</graphml>")
     return "\n".join(out)

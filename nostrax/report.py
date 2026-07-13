@@ -69,26 +69,24 @@ def generate_html_report(
             resp_time = f"{r.response_time:.0f}ms"
 
         rows.append(
-            f'<tr>'
+            f"<tr>"
             f'<td><a href="{html.escape(r.url)}" target="_blank">{html.escape(r.url)}</a></td>'
-            f'<td>{html.escape(r.source or "-")}</td>'
-            f'<td>{html.escape(r.tag or "-")}</td>'
-            f'<td>{r.depth}</td>'
+            f"<td>{html.escape(r.source or '-')}</td>"
+            f"<td>{html.escape(r.tag or '-')}</td>"
+            f"<td>{r.depth}</td>"
             f'<td class="{status_class}">{status_text}</td>'
-            f'<td>{resp_time}</td>'
-            f'</tr>'
+            f"<td>{resp_time}</td>"
+            f"</tr>"
         )
 
     table_html = "\n".join(rows)
 
     top_sources = "\n".join(
-        f"<li>{html.escape(src)} ({cnt})</li>"
-        for src, cnt in source_counts.most_common(10)
+        f"<li>{html.escape(src)} ({cnt})</li>" for src, cnt in source_counts.most_common(10)
     )
 
     tag_stats = "\n".join(
-        f"<li>&lt;{html.escape(tag)}&gt; ({cnt})</li>"
-        for tag, cnt in tag_counts.most_common()
+        f"<li>&lt;{html.escape(tag)}&gt; ({cnt})</li>" for tag, cnt in tag_counts.most_common()
     )
 
     return f"""<!DOCTYPE html>

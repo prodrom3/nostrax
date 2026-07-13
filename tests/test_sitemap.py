@@ -104,7 +104,7 @@ def test_safe_parse_rejects_entity():
 
 
 def test_safe_parse_valid_xml():
-    result = _safe_parse_xml('<root><child>text</child></root>')
+    result = _safe_parse_xml("<root><child>text</child></root>")
     assert result is not None
     assert result.tag == "root"
 
@@ -114,7 +114,7 @@ def test_safe_parse_rejects_xml_bomb():
     bomb = (
         '<?xml version="1.0"?>'
         '<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;">]>'
-        '<lolz>&lol2;</lolz>'
+        "<lolz>&lol2;</lolz>"
     )
     assert _safe_parse_xml(bomb) is None
 
@@ -165,8 +165,6 @@ async def test_fetch_sitemap_max_depth():
     mock_session.get = MagicMock(return_value=_make_mock_response(index))
 
     # Force starting at depth 4 (limit is 5), so only 1 more level
-    urls = await fetch_sitemap(
-        mock_session, "https://example.com/sitemap.xml", _depth=4
-    )
+    urls = await fetch_sitemap(mock_session, "https://example.com/sitemap.xml", _depth=4)
     # Should stop at depth 5, returning empty
     assert urls == []

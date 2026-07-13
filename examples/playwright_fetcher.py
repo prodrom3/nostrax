@@ -120,9 +120,7 @@ class PlaywrightFetcher:
             context = await self._browser.new_context(**context_kwargs)
             page = await context.new_page()
             try:
-                await page.goto(
-                    url, timeout=timeout * 1000, wait_until=self._wait_until
-                )
+                await page.goto(url, timeout=timeout * 1000, wait_until=self._wait_until)
                 html = await page.content()
                 elapsed = (time.monotonic() - start) * 1000
                 if len(html.encode("utf-8", "ignore")) > max_response_size:

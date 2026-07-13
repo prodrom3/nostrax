@@ -5,9 +5,7 @@ import os
 
 import pytest
 
-_EXAMPLE = os.path.join(
-    os.path.dirname(__file__), "..", "examples", "playwright_fetcher.py"
-)
+_EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "examples", "playwright_fetcher.py")
 
 
 def _load_example():

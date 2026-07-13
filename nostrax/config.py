@@ -99,9 +99,7 @@ def load_config() -> dict:
         return {}
 
 
-def user_provided_attrs(
-    parser: argparse.ArgumentParser, argv: list[str] | None
-) -> set[str]:
+def user_provided_attrs(parser: argparse.ArgumentParser, argv: list[str] | None) -> set[str]:
     """Return the set of ``dest`` names the user explicitly passed on argv.
 
     Done by temporarily setting every action's default to ``argparse.SUPPRESS``
@@ -121,9 +119,7 @@ def user_provided_attrs(
     return set(vars(ns).keys())
 
 
-def merge_config(
-    args: object, config: dict, provided: set[str]
-) -> None:
+def merge_config(args: object, config: dict, provided: set[str]) -> None:
     """Apply config values to ``args`` for keys the user did not pass on argv.
 
     ``provided`` is the set of ``dest`` names the user explicitly supplied

@@ -124,7 +124,8 @@ def write_output(
 ) -> None:
     """Format URLs and write to stdout or a file."""
     formatted = format_urls(
-        urls, fmt,
+        urls,
+        fmt,
         include_metadata=include_metadata,
         statuses=statuses,
     )
@@ -134,9 +135,7 @@ def write_output(
     if output_file:
         output_path = os.path.realpath(output_file)
         if not is_path_within(output_path, os.getcwd()):
-            logger.error(
-                "Refusing to write outside working directory: %s", output_file
-            )
+            logger.error("Refusing to write outside working directory: %s", output_file)
             return
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(formatted + "\n")
