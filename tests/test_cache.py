@@ -29,6 +29,37 @@ def test_cache_mark_and_save_visited(tmp_path, monkeypatch):
     assert "https://example.com/page2" in cache2.visited
 
 
+def test_cache_save_and_load_frontier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+
+    cache.save_frontier([("https://example.com/a", 1), ("https://example.com/b", 2)])
+
+    cache2 = CrawlCache(str(tmp_path))
+    cache2.initialize()
+    assert cache2.load_frontier() == [
+        ("https://example.com/a", 1),
+        ("https://example.com/b", 2),
+    ]
+
+
+def test_cache_load_frontier_missing_is_empty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    assert cache.load_frontier() == []
+
+
+def test_cache_clear_removes_frontier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    cache.save_frontier([("https://example.com/a", 1)])
+    cache.clear()
+    assert cache.load_frontier() == []
+
+
 def test_cache_save_and_load_results(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache = CrawlCache(str(tmp_path))

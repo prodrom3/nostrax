@@ -4,9 +4,15 @@ Copyright (c) 2024 prodrom3 / radamic
 Licensed under the MIT License.
 """
 
+from functools import lru_cache
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qsl
 
 
+# normalize_url is pure and gets called repeatedly on the same URL within a
+# crawl (scope check, visited check, final dedup). A bounded LRU turns those
+# repeats into dict lookups without letting the cache grow without limit on a
+# long-running or library-embedded process.
+@lru_cache(maxsize=8192)
 def normalize_url(url: str) -> str:
     """Normalize a URL to improve deduplication.
 
@@ -21,11 +27,16 @@ def normalize_url(url: str) -> str:
 
     # Lowercase scheme and host
     scheme = parsed.scheme.lower()
-    netloc = parsed.hostname or ""
+    host = parsed.hostname or ""
+    # An IPv6 literal (contains ':') must keep its bracket form or the
+    # rebuilt URL is malformed - "http://[::1]:8080/" not "http://::1:8080/".
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host
     if parsed.port:
         default_ports = {"http": 80, "https": 443}
         if parsed.port != default_ports.get(scheme):
-            netloc = f"{netloc}:{parsed.port}"
+            netloc = f"{host}:{parsed.port}"
 
     # Strip credentials from URLs to prevent leaking them in output
     # (userinfo is intentionally dropped)

@@ -5,12 +5,37 @@ import socket
 import pytest
 
 from nostrax.validation import (
+    is_path_within,
     redact_credentials,
     validate_header_value,
     validate_positive_int,
     validate_proxy_url,
     validate_target_url,
 )
+
+
+def test_is_path_within_accepts_child(tmp_path):
+    child = tmp_path / "sub" / "file.txt"
+    assert is_path_within(str(child), str(tmp_path)) is True
+
+
+def test_is_path_within_accepts_base_itself(tmp_path):
+    assert is_path_within(str(tmp_path), str(tmp_path)) is True
+
+
+def test_is_path_within_rejects_parent_escape(tmp_path):
+    outside = tmp_path.parent / "elsewhere.txt"
+    assert is_path_within(str(outside), str(tmp_path)) is False
+
+
+def test_is_path_within_rejects_sibling_prefix(tmp_path):
+    # The classic startswith bug: "/base-evil" starts with "/base" but is
+    # not inside it. commonpath must reject this.
+    base = tmp_path / "base"
+    base.mkdir()
+    sibling = tmp_path / "base-evil"
+    sibling.mkdir()
+    assert is_path_within(str(sibling / "x"), str(base)) is False
 
 
 def _fake_getaddrinfo(ip: str):

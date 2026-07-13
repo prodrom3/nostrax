@@ -14,8 +14,9 @@ Licensed under the MIT License.
 
 import ipaddress
 import logging
+import socket
 
-from aiohttp.abc import AbstractResolver
+from aiohttp.abc import AbstractResolver, ResolveResult
 from aiohttp.resolver import DefaultResolver
 
 from nostrax.validation import _classify_unsafe_ip
@@ -40,12 +41,15 @@ class SafeResolver(AbstractResolver):
         self._inner = DefaultResolver()
 
     async def resolve(
-        self, host: str, port: int = 0, family: int = 0
-    ) -> list[dict]:
+        self,
+        host: str,
+        port: int = 0,
+        family: socket.AddressFamily = socket.AF_UNSPEC,
+    ) -> list[ResolveResult]:
         infos = await self._inner.resolve(host, port, family)
-        safe: list[dict] = []
+        safe: list[ResolveResult] = []
         for info in infos:
-            addr = info.get("host", "")
+            addr = info["host"]
             try:
                 ip = ipaddress.ip_address(addr)
             except ValueError:

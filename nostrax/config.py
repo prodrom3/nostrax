@@ -10,6 +10,7 @@ Licensed under the MIT License.
 import argparse
 import logging
 import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,12 @@ def _find_config_file() -> str | None:
 
 def _parse_toml(path: str) -> dict:
     """Parse a TOML file via stdlib tomllib (3.11+) or the tomli backport (3.10)."""
-    try:
+    # A version_info guard (rather than try/except) lets type checkers see
+    # the two imports as mutually exclusive, so there is no redefinition.
+    if sys.version_info >= (3, 11):
         import tomllib
-    except ImportError:
-        import tomli as tomllib  # pyproject.toml pins this on Python < 3.11
+    else:
+        import tomli as tomllib
     with open(path, "rb") as f:
         return tomllib.load(f)
 

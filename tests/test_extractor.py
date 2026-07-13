@@ -119,6 +119,20 @@ def test_meta_refresh_case_insensitive_and_quoted():
     assert urls == ["https://example.com/quoted"]
 
 
+def test_meta_refresh_tolerates_spaces_around_equals():
+    html = '<meta http-equiv="refresh" content="5; url = /spaced">'
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == ["https://example.com/spaced"]
+
+
+def test_skips_mixed_case_javascript_scheme():
+    # Schemes are case-insensitive; "JavaScript:" must be dropped like
+    # "javascript:" so pseudo-URLs never leak into results.
+    html = '<a href="JavaScript:alert(1)">x</a><a href="/real">y</a>'
+    urls = extract_urls(html, "https://example.com/", tags={"a"})
+    assert urls == ["https://example.com/real"]
+
+
 def test_meta_without_refresh_is_ignored():
     html = '<meta http-equiv="content-type" content="text/html; charset=utf-8">'
     urls = extract_urls(html, "https://example.com/", tags={"meta"})

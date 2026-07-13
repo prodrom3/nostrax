@@ -10,7 +10,7 @@
 [![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/prodrom3/nostrax)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Async](https://img.shields.io/badge/async-aiohttp-blue.svg)](https://docs.aiohttp.org/)
-[![Tests](https://img.shields.io/badge/tests-200%2B-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-250%2B-brightgreen.svg)](tests/)
 [![SemVer](https://img.shields.io/badge/semver-2.0.0-blue.svg)](https://semver.org/)
 
 <img width="360" src="https://github.com/prodrom3/nostrax/assets/7604466/2872263b-788b-42f4-96d4-7670437b205a">
@@ -54,7 +54,10 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 | Crawl a large site quickly | Async I/O with connection pooling and DNS caching |
 | Audit for broken links | `--check-status` reports HTTP status codes for every URL |
 | Map a specific section of a site | `--scope` restricts crawling to a URL path prefix |
-| Resume interrupted crawls | `--cache-dir` persists state to disk |
+| Resume interrupted crawls | `--cache-dir` persists the frontier + results and continues from where it stopped |
+| Crawl many pages at once | `--input-file` reads seed URLs from a file or stdin |
+| Feed a link graph to Graphviz/Gephi | `--format dot` / `graphml` emit the source->url graph |
+| Crawl JavaScript-rendered sites | `Fetcher` protocol + `examples/playwright_fetcher.py` |
 | Comply with robots.txt | `--respect-robots` with a standards-compliant parser |
 | Respect rate limits | `--rate-limit` enforces minimum delay between requests |
 | Integrate with CI/CD | JSON/CSV output, exit codes, silent mode |
@@ -67,14 +70,16 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 - **Async I/O** via `aiohttp` with shared session, connection pooling, and DNS caching
 - **Unified DFS / BFS engine** sharing a bounded frontier and a worker pool, so `--strategy bfs` runs at the same concurrency as `--strategy dfs`
-- **Full-jitter retry** for transient network failures, avoiding lockstep retry storms
+- **Full-jitter retry** for transient failures only - network errors, timeouts, and 408/429/5xx are retried; a deterministic 4xx (404, 403, 410) returns immediately instead of burning the retry budget
 - **Separated timeouts**: total, connect, and per-read budgets can be set independently
 - **Content-Type aware** - skips non-HTML responses before downloading
 - **Response size limits** prevent memory exhaustion (default 10 MB for pages, 1 MiB for robots.txt, 50 MiB for sitemaps)
 - **Per-host rate limiting**: `--rate-limit` applies to each netloc independently, not globally
-- **robots.txt support** with standards-compliant URL matching and redirects disabled
+- **robots.txt support** with standards-compliant URL matching, redirects disabled, and `Crawl-delay` honoured (including fractional delays) so `--respect-robots` crawls at the site's stated pace
 - **Scope control** to restrict crawling to a URL path prefix
-- **Resume from disk** via on-disk cache with atomic rewrites of the visited set and a kept-open append handle for results
+- **Resume from disk** via on-disk cache: the pending frontier is persisted and the visited set is recorded only after a successful fetch, so an interrupted crawl *continues* from its un-crawled frontier (and retries failed pages) rather than just reloading prior results
+- **Seed lists** via `--input-file` (a file or stdin): each seed is crawled independently and the results are merged and de-duplicated
+- **Sitemap discovery from robots.txt** `Sitemap:` directives, in addition to the conventional `/sitemap.xml`
 - **Graceful shutdown**: `SIGINT` (Ctrl+C) flushes the cache before exiting with code 130
 
 ### Extraction
@@ -91,7 +96,7 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 - Filter by domain (internal / external / all), protocol, regex include, regex exclude
 - `--pattern` / `--exclude` regexes run through the `regex` package with a per-URL timeout, bounding worst-case ReDoS exposure
-- Output formats: plain, JSON, CSV, self-contained HTML report
+- Output formats: plain, JSON, JSON Lines (`jsonl`, streaming-friendly), CSV, self-contained HTML report, and link-graph export to Graphviz `dot` / `graphml`
 - Rich metadata per URL: source page, tag type, depth, response time, status
 - Deduplication and sorting
 - File output with path traversal protection
@@ -402,13 +407,34 @@ async def playwright_fetcher(session, url, *, timeout, max_response_size,
 urls = crawl("https://example.com", fetcher=playwright_fetcher)
 ```
 
+A complete, runnable Playwright adapter ships in
+[`examples/playwright_fetcher.py`](examples/playwright_fetcher.py) (install
+with `pip install "nostrax[playwright]"`).
+
+### Crawl a list of seeds
+
+`crawl_seeds` / `crawl_seeds_async` crawl several seed URLs - each with its
+own domain, scope, and robots.txt - and return the merged, de-duplicated
+results. A seed that fails is skipped, not fatal.
+
+```python
+from nostrax import crawl_seeds
+
+results = crawl_seeds(
+    ["https://example.com", "https://another.example"],
+    depth=1,
+    include_metadata=True,
+)
+```
+
 ## CLI Reference
 
 ```
-usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
-               [--all-tags] [--tags TAGS] [--domain {all,internal,external}]
+usage: nostrax [-h] [-V] [--check-update] [-t TARGET] [--input-file FILE]
+               [-s] [-d DEPTH] [--all-tags] [--tags TAGS]
+               [--domain {all,internal,external}]
                [--protocol PROTOCOL] [--pattern PATTERN] [--exclude EXCLUDE]
-               [--sort] [-f {plain,json,csv,html}] [-o OUTPUT]
+               [--sort] [-f {plain,json,jsonl,csv,html,dot,graphml}] [-o OUTPUT]
                [--timeout TIMEOUT] [--connect-timeout SECS] [--read-timeout SECS]
                [--user-agent USER_AGENT] [-v] [--no-dedup]
                [--max-concurrent N] [--respect-robots] [--max-urls N]
@@ -424,7 +450,8 @@ usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
 |---|---|
 | `-V, --version` | Show version and exit |
 | `--check-update` | Check PyPI for a newer version and exit |
-| `-t, --target` | Target URL to extract from (required) |
+| `-t, --target` | Target URL to extract from (required unless `--input-file` is given) |
+| `--input-file` | Read seed URLs from a file, one per line (`-` for stdin); merged results |
 | `-s, --silent` | Suppress all output (exit code only) |
 | `-d, --depth` | Recursion depth for crawling (default: 0) |
 | `--all-tags` | Extract URLs from all supported tags |
@@ -434,7 +461,7 @@ usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
 | `--pattern` | Regex pattern to filter URLs (keep matches) |
 | `--exclude` | Regex pattern to exclude URLs (remove matches) |
 | `--sort` | Sort URLs alphabetically |
-| `-f, --format` | Output format: `plain`, `json`, `csv`, or `html` |
+| `-f, --format` | Output format: `plain`, `json`, `jsonl`, `csv`, `html`, `dot`, or `graphml` |
 | `-o, --output` | Write output to file instead of stdout |
 | `--timeout` | Total request timeout in seconds (default: 10) |
 | `--connect-timeout` | Per-connection timeout in seconds (defaults to `--timeout`) |
@@ -448,7 +475,7 @@ usage: nostrax [-h] [-V] [--check-update] -t TARGET [-s] [-d DEPTH]
 | `--rate-limit` | Minimum seconds between requests **per host** (default: 0) |
 | `--proxy` | Proxy URL (`http`, `https`, `socks4`, `socks5`) |
 | `--auth` | HTTP basic auth as `user:password` |
-| `--sitemap` | Also parse `sitemap.xml` for additional URLs |
+| `--sitemap` | Also parse sitemaps (robots.txt `Sitemap:` directives + `/sitemap.xml`) |
 | `--check-status` | Check HTTP status code of each discovered URL |
 | `--metadata` | Include source page, tag type, and depth in output |
 | `--progress` | Show a progress bar (requires `tqdm`) |
@@ -555,14 +582,15 @@ flowchart TD
 | `nostrax.crawler` | Unified async crawl engine (frontier + worker pool), `PerHostRateLimiter` |
 | `nostrax.extractor` | HTML parsing and URL extraction (lxml + SoupStrainer, `<base>`, `srcset`, meta-refresh) |
 | `nostrax.filters` | Domain, protocol, and `regex`-backed timeout-bounded filters |
-| `nostrax.output` | Output formatting (plain, JSON, CSV) |
+| `nostrax.output` | Output formatting (plain, JSON, JSON Lines, CSV) |
 | `nostrax.report` | HTML report generation |
+| `nostrax.graph` | Link-graph export (Graphviz DOT, GraphML) |
 | `nostrax.models` | `UrlResult` dataclass |
 | `nostrax.normalize` | URL normalization |
 | `nostrax.sitemap` | `sitemap.xml` parser through `defusedxml` |
 | `nostrax.status` | Async HTTP status checker |
 | `nostrax.robots` | `robots.txt` compliance |
-| `nostrax.cache` | On-disk crawl cache with atomic visited save + kept-open results handle |
+| `nostrax.cache` | On-disk crawl cache: atomic visited + frontier save, kept-open results handle |
 | `nostrax.config` | `.nostraxrc` loader |
 | `nostrax.validation` | Input validation (SSRF classifier, bounds, headers, credential redaction) |
 | `nostrax.resolver` | `SafeResolver` for aiohttp, applies the SSRF classifier to every DNS resolution |

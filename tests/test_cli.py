@@ -1,9 +1,52 @@
 """Tests for nostrax.cli."""
 
+import io
 import pytest
 from unittest.mock import patch, AsyncMock
 
-from nostrax.cli import main, _parse_auth
+from nostrax.cli import main, _parse_auth, _read_seeds
+
+
+def test_read_seeds_from_file_skips_blanks_and_comments(tmp_path):
+    p = tmp_path / "seeds.txt"
+    p.write_text(
+        "https://a.test\n\n# a comment\n  https://b.test  \nhttps://c.test\n",
+        encoding="utf-8",
+    )
+    assert _read_seeds(str(p)) == [
+        "https://a.test",
+        "https://b.test",
+        "https://c.test",
+    ]
+
+
+def test_read_seeds_from_stdin(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("https://a.test\n# skip\nhttps://b.test\n"))
+    assert _read_seeds("-") == ["https://a.test", "https://b.test"]
+
+
+@patch("nostrax.cli.validate_target_url", return_value=None)
+@patch("nostrax.cli.crawl_seeds_async", new_callable=AsyncMock)
+def test_main_input_file_crawls_seeds(mock_seeds, _mock_valid, tmp_path, capsys):
+    mock_seeds.return_value = ["https://a.test/1", "https://b.test/2"]
+    seedfile = tmp_path / "seeds.txt"
+    seedfile.write_text("https://a.test\nhttps://b.test\n", encoding="utf-8")
+
+    exit_code = main(["--input-file", str(seedfile)])
+    assert exit_code == 0
+    # crawl_seeds_async was called with both seeds
+    called_seeds = mock_seeds.call_args[0][0]
+    assert called_seeds == ["https://a.test", "https://b.test"]
+    out = capsys.readouterr().out
+    assert "https://a.test/1" in out
+
+
+@patch("nostrax.cli.validate_target_url", return_value=None)
+def test_main_input_file_with_cache_dir_errors(_mock_valid, tmp_path):
+    seedfile = tmp_path / "seeds.txt"
+    seedfile.write_text("https://a.test\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main(["--input-file", str(seedfile), "--cache-dir", "cache"])
 
 
 @patch("nostrax.cli.crawl_async", new_callable=AsyncMock)

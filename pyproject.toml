@@ -15,6 +15,35 @@ authors = [
 maintainers = [
     { name = "radamic" },
 ]
+keywords = [
+    "crawler",
+    "web-crawler",
+    "url-extraction",
+    "scraper",
+    "sitemap",
+    "seo",
+    "async",
+    "aiohttp",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
 dependencies = [
     "aiohttp>=3.9",
     "beautifulsoup4>=4.12",
@@ -29,13 +58,24 @@ dependencies = [
 progress = [
     "tqdm>=4.60",
 ]
+playwright = [
+    "playwright>=1.40",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",
     "aioresponses>=0.7",
     "tqdm>=4.60",
+    "ruff>=0.6",
+    "mypy>=1.8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/prodrom3/nostrax"
+Repository = "https://github.com/prodrom3/nostrax"
+Issues = "https://github.com/prodrom3/nostrax/issues"
+Changelog = "https://github.com/prodrom3/nostrax/blob/main/CHANGELOG.md"
 
 [project.scripts]
 nostrax = "nostrax.cli:main"
@@ -46,3 +86,29 @@ nostrax = ["py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/F: pyflakes + pycodestyle errors, UP: pyupgrade, B: bugbear. Kept
+# conservative (no import-sorting churn) so CI enforcement is a clean gate
+# on the codebase as it stands today.
+select = ["E", "F", "UP", "B"]
+ignore = [
+    "E501",  # long lines are tolerated; the formatter owns wrapping
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately assert on the broad NostraxError -> Exception surface.
+"tests/*" = ["B011", "B017"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["nostrax"]
+# Third-party packages that ship no type stubs. The nostrax package itself
+# is fully checked; these just silence "missing stubs" noise for its deps.
+ignore_missing_imports = true
+warn_unused_ignores = true
+no_implicit_optional = true

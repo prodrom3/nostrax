@@ -31,6 +31,28 @@ def test_format_csv():
     assert lines[2] == "https://example.com/b"
 
 
+def test_format_jsonl_plain():
+    result = format_urls(URLS, "jsonl")
+    lines = result.splitlines()
+    assert [json.loads(line) for line in lines] == URLS
+
+
+def test_format_jsonl_with_metadata():
+    results = [
+        UrlResult(url="https://example.com/a", source="https://example.com", tag="a", depth=1),
+        UrlResult(url="https://example.com/b", tag="img", depth=2),
+    ]
+    out = format_urls(results, "jsonl", include_metadata=True)
+    lines = out.splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["url"] == "https://example.com/a"
+    assert first["source"] == "https://example.com"
+    assert first["tag"] == "a"
+    # each line is independently parseable
+    assert json.loads(lines[1])["url"] == "https://example.com/b"
+
+
 def test_format_unknown():
     with pytest.raises(ValueError):
         format_urls(URLS, "xml")

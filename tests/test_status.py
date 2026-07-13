@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nostrax.status import check_url_status, check_statuses
+from nostrax.status import check_url_status
 
 
 def _make_mock_response(status=200):

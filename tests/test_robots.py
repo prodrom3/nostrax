@@ -17,6 +17,12 @@ User-agent: nostrax
 Disallow: /secret/
 """
 
+ROBOTS_TXT_WITH_DELAY = """
+User-agent: *
+Crawl-delay: 2.5
+Disallow: /private/
+"""
+
 
 def _make_mock_response(text, status=200):
     mock_resp = AsyncMock()
@@ -28,6 +34,63 @@ def _make_mock_response(text, status=200):
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_resp.__aexit__ = AsyncMock(return_value=False)
     return mock_resp
+
+
+@pytest.mark.asyncio
+async def test_robots_crawl_delay_parsed():
+    checker = RobotsChecker("nostrax/1.0")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(
+        return_value=_make_mock_response(ROBOTS_TXT_WITH_DELAY)
+    )
+
+    await checker.load(mock_session, "https://example.com/page")
+    assert checker.crawl_delay() == 2.5
+
+
+def test_robots_crawl_delay_none_when_not_loaded():
+    checker = RobotsChecker("nostrax/1.0")
+    assert checker.crawl_delay() is None
+
+
+@pytest.mark.asyncio
+async def test_robots_crawl_delay_prefers_specific_agent():
+    """A named group's Crawl-delay wins over the wildcard group, and a
+    fractional value (which stdlib's parser silently drops) is honoured."""
+    txt = (
+        "User-agent: *\n"
+        "Crawl-delay: 10\n"
+        "\n"
+        "User-agent: nostrax\n"
+        "Crawl-delay: 0.5\n"
+    )
+    checker = RobotsChecker("nostrax/1.0")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=_make_mock_response(txt))
+    await checker.load(mock_session, "https://example.com/page")
+    assert checker.crawl_delay() == 0.5
+
+
+@pytest.mark.asyncio
+async def test_robots_sitemaps_discovered():
+    txt = (
+        "User-agent: *\n"
+        "Disallow: /x/\n"
+        "Sitemap: https://example.com/sitemap-a.xml\n"
+        "Sitemap: https://example.com/sitemap-b.xml\n"
+    )
+    checker = RobotsChecker("nostrax/1.0")
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=_make_mock_response(txt))
+    await checker.load(mock_session, "https://example.com/page")
+    assert checker.sitemaps() == [
+        "https://example.com/sitemap-a.xml",
+        "https://example.com/sitemap-b.xml",
+    ]
+
+
+def test_robots_sitemaps_empty_when_not_loaded():
+    assert RobotsChecker("nostrax/1.0").sitemaps() == []
 
 
 @pytest.mark.asyncio

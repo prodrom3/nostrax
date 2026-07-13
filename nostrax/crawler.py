@@ -11,12 +11,13 @@ import random
 import time
 from collections.abc import Callable
 from functools import partial
+from typing import Any, cast
 from urllib.parse import urlparse, urljoin
 
 import aiohttp
 
 from nostrax.cache import CrawlCache
-from nostrax.exceptions import FetchError
+from nostrax.exceptions import FetchError, NostraxError
 from nostrax.extractor import extract_urls
 from nostrax.metrics import MetricsSink, NullMetricsSink
 from nostrax.models import UrlResult
@@ -38,6 +39,12 @@ DEFAULT_RETRIES = 2
 DEFAULT_DNS_CACHE_TTL = 300  # 5 minutes
 
 _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
+
+# HTTP statuses worth retrying: request timeout and rate limiting are
+# transient, so is anything 5xx. A plain 4xx (404, 403, 410 ...) is
+# deterministic - retrying it just burns backoff sleeps on a result that
+# will not change - so those are returned immediately without retry.
+_RETRYABLE_STATUSES = frozenset({408, 429})
 
 
 class PerHostRateLimiter:
@@ -130,7 +137,27 @@ async def fetch_page(
                     logger.debug("Skipping non-HTML %s: %s", url, content_type)
                     return None, elapsed
 
-                response.raise_for_status()
+                # Explicit status handling replaces raise_for_status() so we
+                # can retry only transient failures. A ClientResponseError from
+                # raise_for_status() would be caught below and retried for every
+                # 4xx, which is wasted work on deterministic client errors.
+                status = response.status
+                if status >= 400:
+                    retryable = status in _RETRYABLE_STATUSES or 500 <= status < 600
+                    if retryable and attempt < retries:
+                        delay = random.uniform(0, 2 ** attempt)
+                        logger.debug(
+                            "Retry %d/%d for %s after HTTP %d (waiting %.2fs)",
+                            attempt + 1, retries, url, status, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.warning(
+                        "HTTP %d for %s%s",
+                        status, url,
+                        "" if retryable else " (client error, not retried)",
+                    )
+                    return None, elapsed
 
                 content_length = response.content_length
                 if content_length is not None and content_length > max_response_size:
@@ -289,7 +316,14 @@ async def crawl_async(
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
     rate_limiter = PerHostRateLimiter(rate_limit)
-    visited: set[str] = set()
+    # completed: normalized URLs that were fully fetched (or permanently
+    # skipped by robots.txt). This is the set persisted for resume.
+    # pending: normalized URL -> (url, depth) for URLs that have been
+    # enqueued but not yet completed. It doubles as the in-run dedup guard
+    # and, at shutdown, as the frontier to persist so an interrupted crawl
+    # can continue rather than only reloading prior results.
+    completed: set[str] = set()
+    pending: dict[str, tuple[str, int]] = {}
     all_results: list[UrlResult] = []
     semaphore = asyncio.Semaphore(max_concurrent)
     robots = RobotsChecker(user_agent) if respect_robots else None
@@ -299,15 +333,21 @@ async def crawl_async(
     # Cache/resume support
     cache = None
     had_cached_results = False
+    resume_frontier: list[tuple[str, int]] = []
     if cache_dir:
         cache = CrawlCache(cache_dir)
         cache.initialize()
-        visited = cache.visited
+        completed = cache.visited  # shared ref; cache.mark_visited updates it
         cached_results = cache.load_results()
         if cached_results:
             all_results.extend(cached_results)
             had_cached_results = True
             logger.info("Resumed with %d cached results", len(cached_results))
+        resume_frontier = cache.load_frontier()
+        if resume_frontier:
+            logger.info(
+                "Resuming with %d pending frontier URLs", len(resume_frontier)
+            )
 
     basic_auth = aiohttp.BasicAuth(auth[0], auth[1]) if auth else None
 
@@ -337,33 +377,66 @@ async def crawl_async(
                     connect_timeout=connect_timeout,
                     read_timeout=read_timeout,
                 )
+                # Honour a robots.txt Crawl-delay by raising (never
+                # lowering) the per-host minimum interval. An explicit
+                # --rate-limit still wins if it is stricter.
+                robots_delay = robots.crawl_delay()
+                if robots_delay and robots_delay > rate_limit:
+                    logger.info(
+                        "Honouring robots.txt Crawl-delay of %.1fs", robots_delay
+                    )
+                    rate_limiter = PerHostRateLimiter(robots_delay)
 
-            # Optionally fetch sitemap.xml
+            # Optionally fetch sitemaps: those advertised in robots.txt plus
+            # the conventional /sitemap.xml. Robots.txt is the standard place
+            # to declare sitemaps that live elsewhere, so we consult it even
+            # when --respect-robots is off (a lightweight extra fetch).
             if use_sitemap:
-                sitemap_url = urljoin(
-                    f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
-                )
-                sitemap_urls = await fetch_sitemap(
-                    session, sitemap_url,
-                    timeout=timeout,
-                    proxy=proxy,
-                    connect_timeout=connect_timeout,
-                    read_timeout=read_timeout,
-                )
-                for su in sitemap_urls:
-                    all_results.append(
-                        UrlResult(url=su, source="sitemap.xml", tag="sitemap", depth=0)
+                sitemap_robots = robots
+                if sitemap_robots is None:
+                    sitemap_robots = RobotsChecker(user_agent)
+                    await sitemap_robots.load(
+                        session, url,
+                        timeout=timeout,
+                        proxy=proxy,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
                     )
 
+                sitemap_targets: list[str] = list(sitemap_robots.sitemaps())
+                default_sitemap = urljoin(
+                    f"{base_parsed.scheme}://{base_parsed.netloc}", "/sitemap.xml"
+                )
+                if default_sitemap not in sitemap_targets:
+                    sitemap_targets.append(default_sitemap)
+
+                for sitemap_url in sitemap_targets:
+                    sitemap_urls = await fetch_sitemap(
+                        session, sitemap_url,
+                        timeout=timeout,
+                        proxy=proxy,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
+                    )
+                    for su in sitemap_urls:
+                        all_results.append(
+                            UrlResult(
+                                url=su, source=sitemap_url, tag="sitemap", depth=0
+                            )
+                        )
+
             def _should_follow(link: str) -> bool:
-                """Check if a link should be followed based on domain and scope."""
+                """Check if a link should be followed based on domain and scope.
+
+                Deduplication against already-seen URLs is handled by
+                ``_enqueue`` so this only encodes the domain/scope policy.
+                """
                 parsed = urlparse(link)
                 if parsed.netloc != base_domain:
                     return False
                 if scope and not parsed.path.startswith(scope):
                     return False
-                normalized = normalize_url(link)
-                return normalized not in visited
+                return True
 
             # Unified engine: a frontier queue + max_concurrent workers.
             # DFS uses LifoQueue (last-in first-out = deepen first); BFS
@@ -386,18 +459,34 @@ async def crawl_async(
                 if strategy == "dfs"
                 else asyncio.Queue(maxsize=frontier_max)
             )
-            await frontier.put((url, 0))
+
+            async def _enqueue(link: str, link_depth: int) -> None:
+                """Add a URL to the frontier unless already seen or completed.
+
+                Recording it in ``pending`` before the (possibly blocking)
+                ``put`` both dedups concurrent discovery of the same URL and
+                keeps ``pending`` an accurate snapshot of un-crawled work for
+                frontier persistence.
+                """
+                norm = normalize_url(link)
+                if norm in completed or norm in pending:
+                    return
+                pending[norm] = (link, link_depth)
+                await frontier.put((link, link_depth))
+
+            def _mark_done(normalized: str) -> None:
+                completed.add(normalized)
+                if cache:
+                    cache.mark_visited(normalized)
+                pending.pop(normalized, None)
 
             async def _process_one(current_url: str, current_depth: int) -> None:
                 nonlocal pages_crawled
 
                 normalized = normalize_url(current_url)
-                if normalized in visited:
+                if normalized in completed:
+                    pending.pop(normalized, None)
                     return
-                visited.add(normalized)
-
-                if cache:
-                    cache.mark_visited(normalized)
 
                 if len(all_results) >= max_urls:
                     return
@@ -410,6 +499,9 @@ async def crawl_async(
                         logger.warning(
                             "metrics sink raised in on_robots_blocked: %s", e
                         )
+                    # Permanently skipped: record as done so a resume does
+                    # not keep retrying a URL robots.txt will block again.
+                    _mark_done(normalized)
                     return
 
                 await rate_limiter.wait(urlparse(current_url).netloc)
@@ -434,12 +526,18 @@ async def crawl_async(
                         )
                     return
 
-                found = await loop.run_in_executor(
-                    None,
-                    partial(
-                        extractor, html, current_url,
-                        tags=tags, deduplicate=False,
-                        include_metadata=True, depth=current_depth,
+                # Called with include_metadata=True, so the extractor returns
+                # list[UrlResult]; the isinstance check below enforces it for
+                # custom extractors that ignore the flag.
+                found = cast(
+                    "list[UrlResult]",
+                    await loop.run_in_executor(
+                        None,
+                        partial(
+                            extractor, html, current_url,
+                            tags=tags, deduplicate=False,
+                            include_metadata=True, depth=current_depth,
+                        ),
                     ),
                 )
 
@@ -459,6 +557,10 @@ async def crawl_async(
                     r.response_time = resp_time
                 all_results.extend(found)
 
+                # Mark done only after a successful fetch. A failed fetch
+                # (html is None, handled above) stays in ``pending`` so a
+                # resume retries it instead of silently dropping its subtree.
+                _mark_done(normalized)
                 if cache:
                     for r in found:
                         cache.save_result(r)
@@ -484,7 +586,7 @@ async def crawl_async(
                 if current_depth < depth:
                     for result in found:
                         if _should_follow(result.url):
-                            await frontier.put((result.url, current_depth + 1))
+                            await _enqueue(result.url, current_depth + 1)
 
             # Capture the first exception raised inside any worker so it
             # propagates out of crawl_async after frontier.join() completes.
@@ -510,10 +612,16 @@ async def crawl_async(
                     finally:
                         frontier.task_done()
 
+            # Start the workers before seeding so that a large resume
+            # frontier (which may exceed the queue's maxsize) drains as we
+            # enqueue instead of dead-locking on a full queue.
             workers = [
                 asyncio.create_task(_worker()) for _ in range(max_concurrent)
             ]
             try:
+                for f_url, f_depth in resume_frontier:
+                    await _enqueue(f_url, f_depth)
+                await _enqueue(url, 0)
                 await frontier.join()
             finally:
                 for w in workers:
@@ -536,6 +644,7 @@ async def crawl_async(
         if cache:
             try:
                 cache.save_visited()
+                cache.save_frontier(list(pending.values()))
             finally:
                 cache.close()
 
@@ -617,5 +726,86 @@ def crawl(
             metrics=metrics,
             fetcher=fetcher,
             extractor=extractor,
+        )
+    )
+
+
+async def crawl_seeds_async(
+    seeds: list[str],
+    *,
+    deduplicate: bool = True,
+    include_metadata: bool = False,
+    **kwargs: Any,
+) -> list[str] | list[UrlResult]:
+    """Crawl several seed URLs and return the merged, de-duplicated results.
+
+    Each seed is crawled independently with :func:`crawl_async` - its own
+    base domain, scope, and robots.txt - so seeds may span different sites.
+    A seed that fails to fetch is logged and skipped rather than aborting
+    the whole batch; the call raises :class:`FetchError` only when *every*
+    seed fails. Results are de-duplicated across seeds by normalized URL.
+
+    ``cache_dir`` is not supported here: resume is a single-target concept,
+    and a shared visited/frontier set across seeds would double-count
+    reloaded results. Pass any other ``crawl_async`` keyword through
+    ``kwargs``.
+    """
+    if not seeds:
+        raise ValueError("no seed URLs provided")
+    if kwargs.get("cache_dir"):
+        raise ValueError(
+            "cache_dir is not supported with multiple seeds; crawl a single "
+            "target to use resume"
+        )
+
+    merged: list[UrlResult] = []
+    failures = 0
+    for seed in seeds:
+        try:
+            results = await crawl_async(
+                seed, deduplicate=False, include_metadata=True, **kwargs
+            )
+        except NostraxError as e:
+            logger.warning("Skipping seed %s: %s", seed, e)
+            failures += 1
+            continue
+        # include_metadata=True above guarantees UrlResult items.
+        merged.extend(cast("list[UrlResult]", results))
+
+    if failures == len(seeds):
+        raise FetchError(
+            seeds[0],
+            "no seed URLs could be crawled; check connectivity and logs",
+        )
+
+    if deduplicate:
+        seen: set[str] = set()
+        unique: list[UrlResult] = []
+        for r in merged:
+            norm = normalize_url(r.url)
+            if norm not in seen:
+                seen.add(norm)
+                unique.append(r)
+        merged = unique
+
+    if include_metadata:
+        return merged
+    return [r.url for r in merged]
+
+
+def crawl_seeds(
+    seeds: list[str],
+    *,
+    deduplicate: bool = True,
+    include_metadata: bool = False,
+    **kwargs: Any,
+) -> list[str] | list[UrlResult]:
+    """Synchronous wrapper around :func:`crawl_seeds_async`."""
+    return asyncio.run(
+        crawl_seeds_async(
+            seeds,
+            deduplicate=deduplicate,
+            include_metadata=include_metadata,
+            **kwargs,
         )
     )

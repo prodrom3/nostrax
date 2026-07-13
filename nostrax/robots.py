@@ -15,6 +15,60 @@ logger = logging.getLogger(__name__)
 MAX_ROBOTS_SIZE = 1 * 1024 * 1024  # 1 MiB; Google's published cap is 500 KB.
 
 
+def _extract_crawl_delay(lines: list[str], user_agent: str) -> float | None:
+    """Parse the applicable Crawl-delay for ``user_agent`` from robots.txt.
+
+    Written by hand because stdlib ``RobotFileParser`` accepts only integer
+    delays (it gates on ``str.isdigit``), silently dropping the very common
+    fractional form ``Crawl-delay: 0.5``. Consecutive ``User-agent`` lines
+    share one group; a more specific agent match wins over ``*``.
+    """
+    groups: list[tuple[list[str], float | None]] = []
+    agents: list[str] = []
+    delay: float | None = None
+    in_rules = False
+
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip().lower()
+        val = val.strip()
+        if key == "user-agent":
+            if in_rules:  # a new group begins after the previous group's rules
+                groups.append((agents, delay))
+                agents, delay, in_rules = [], None, False
+            agents.append(val.lower())
+        elif key == "crawl-delay":
+            in_rules = True
+            try:
+                delay = float(val)
+            except ValueError:
+                pass
+        else:
+            in_rules = True
+    if agents:
+        groups.append((agents, delay))
+
+    ua = user_agent.lower()
+    best: tuple[int, float] | None = None  # (specificity, delay)
+    for group_agents, group_delay in groups:
+        if group_delay is None:
+            continue
+        for agent in group_agents:
+            if agent == "*":
+                spec = 0
+            elif agent and agent in ua:
+                spec = 1
+            else:
+                continue
+            if best is None or spec > best[0]:
+                best = (spec, group_delay)
+            break
+    return best[1] if best else None
+
+
 class RobotsChecker:
     """Fetches and checks robots.txt rules for a target site."""
 
@@ -22,6 +76,7 @@ class RobotsChecker:
         self._user_agent = user_agent
         self._parser = RobotFileParser()
         self._loaded = False
+        self._crawl_delay: float | None = None
 
     async def load(
         self,
@@ -64,7 +119,9 @@ class RobotsChecker:
                     self._loaded = False
                     return
                 text = body.decode("utf-8", errors="replace")
-                self._parser.parse(text.splitlines())
+                lines = text.splitlines()
+                self._parser.parse(lines)
+                self._crawl_delay = _extract_crawl_delay(lines, self._user_agent)
                 self._loaded = True
                 logger.info("Loaded robots.txt from %s", robots_url)
         except (aiohttp.ClientError, TimeoutError) as e:
@@ -79,3 +136,26 @@ class RobotsChecker:
         if not self._loaded:
             return True
         return self._parser.can_fetch(self._user_agent, url)
+
+    def sitemaps(self) -> list[str]:
+        """Return the ``Sitemap:`` URLs declared in robots.txt, if any.
+
+        robots.txt is the standard place sites advertise sitemaps that are
+        not at the conventional ``/sitemap.xml`` path. Empty list when no
+        robots.txt was loaded or none were declared.
+        """
+        if not self._loaded:
+            return []
+        return list(self._parser.site_maps() or [])
+
+    def crawl_delay(self) -> float | None:
+        """Return the robots.txt Crawl-delay for our user agent, if any.
+
+        ``None`` when no robots.txt was loaded or the site declares no
+        delay for this agent. The crawler uses this to raise its per-host
+        minimum interval so a polite crawl honours the site's stated rate.
+        Fractional delays are supported (stdlib's parser drops them).
+        """
+        if not self._loaded:
+            return None
+        return self._crawl_delay
