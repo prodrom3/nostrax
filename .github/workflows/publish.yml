@@ -1,28 +1,21 @@
 name: Publish to PyPI
 
-# Two ways to run:
-#   * Push a version tag (vX.Y.Z)  -> builds and publishes to PyPI.
-#   * Run manually (workflow_dispatch) -> choose testpypi (default) or pypi;
-#     use this to dry-run the whole pipeline against TestPyPI first.
+# Real PyPI publishing is constrained to a single path: pushing a version
+# tag (vX.Y.Z), which runs in the protected `pypi` environment.
+# workflow_dispatch is a dry-run only and always targets TestPyPI, so a
+# manual run can never publish to real PyPI.
 #
 # Publishing uses PyPI Trusted Publishing (OIDC) - no API tokens are stored.
-# One-time setup (per registry): add a trusted publisher for this repo
-# pointing at this workflow (publish.yml) and the matching environment
-# (pypi / testpypi) on pypi.org and/or test.pypi.org.
+# One-time PyPI setup (do this to fully lock it down): configure the trusted
+# publisher for this repo with workflow = publish.yml AND environment = pypi,
+# so a token is only issued to jobs running in that environment. Configure a
+# separate testpypi trusted publisher (environment = testpypi) for dry runs.
 
 on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      target:
-        description: "Registry to publish to"
-        type: choice
-        default: testpypi
-        options:
-          - testpypi
-          - pypi
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -60,8 +53,9 @@ jobs:
     name: Publish
     needs: build
     runs-on: ubuntu-latest
-    # 'testpypi' only for a manual dry-run targeting TestPyPI; 'pypi' otherwise.
-    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') && 'testpypi' || 'pypi' }}
+    # A tag push publishes to real PyPI (protected `pypi` environment); any
+    # other trigger (workflow_dispatch) is a TestPyPI dry run.
+    environment: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && 'pypi' || 'testpypi' }}
     permissions:
       id-token: write # required for OIDC trusted publishing
     steps:
@@ -74,9 +68,8 @@ jobs:
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          # Empty repository-url publishes to real PyPI; the TestPyPI URL is
-          # used only for a manual dry-run.
-          repository-url: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') && 'https://test.pypi.org/legacy/' || '' }}
-          # Don't fail if a version was already uploaded (e.g. a tag push
-          # re-running after a manual publish of the same version).
+          # Empty repository-url publishes to real PyPI (tag push only); every
+          # other trigger publishes to TestPyPI.
+          repository-url: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && '' || 'https://test.pypi.org/legacy/' }}
+          # Don't fail if a version was already uploaded (re-run of a tag).
           skip-existing: true
