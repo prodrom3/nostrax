@@ -636,7 +636,7 @@ nostrax is hardened by default against common attack vectors in crawler and scra
 
 ### Responsible disclosure
 
-See [SECURITY.md](SECURITY.md) for the full vulnerability reporting
+See [SECURITY.md](.github/SECURITY.md) for the full vulnerability reporting
 policy. In short: do **not** file public issues for suspected
 vulnerabilities; open a private GitHub security advisory or contact
 the maintainers privately. Acknowledgement within 5 business days;
