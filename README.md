@@ -543,16 +543,18 @@ From the CLI, use `-v` / `--verbose` to raise the default log level to `DEBUG`. 
 
 ```mermaid
 flowchart TD
-    CLI["cli.py<br/>argparse + validation + config merge"]
+    CLI["cli.py<br/>argparse + validation + config merge<br/>--input-file seeds"]
     Crawler["crawler.py<br/>unified frontier + worker pool"]
     Post["filters / normalize / output<br/>post-processing"]
 
     Frontier["LifoQueue (DFS) / Queue (BFS)<br/>bounded at max_urls * 2"]
-    RateLimiter["PerHostRateLimiter<br/>per-netloc serialisation"]
-    Fetcher["Fetcher protocol<br/>default: fetch_page"]
+    RateLimiter["PerHostRateLimiter /<br/>AdaptiveRateLimiter (--auto-throttle)<br/>keyed per (host, proxy)"]
+    ProxyPool["ProxyPool<br/>round-robin egress rotation"]
+    Fetcher["Fetcher protocol<br/>default: fetch_page<br/>Retry-After, conditional GET (--incremental)"]
     Extractor["Extractor protocol<br/>default: extract_urls"]
-    Robots["robots.py"]
-    Cache["cache.py<br/>atomic visited + kept-open results"]
+    Content["content.py<br/>title / meta / OG / JSON-LD (--content)"]
+    Robots["robots.py<br/>rules + Crawl-delay + Sitemap:"]
+    Cache["cache.py<br/>visited + frontier + incremental store"]
     Sitemap["sitemap.py<br/>defusedxml"]
     Status["status.py<br/>same aiohttp session"]
 
@@ -561,21 +563,24 @@ flowchart TD
     Metrics["MetricsSink<br/>on_page_fetched / failed / robots_blocked"]
 
     Filters["filter_by_domain / protocol<br/>regex with per-URL timeout"]
-    Output["plain / json<br/>csv / html"]
+    Output["plain / json / jsonl / csv<br/>html report / dot + graphml graph"]
 
     CLI --> Crawler
     CLI --> Post
 
     Crawler --> Frontier
     Crawler --> RateLimiter
+    Crawler --> ProxyPool
     Crawler --> Fetcher
     Crawler --> Extractor
+    Crawler --> Content
     Crawler --> Robots
     Crawler --> Cache
     Crawler --> Sitemap
     Crawler --> Status
     Crawler --> Metrics
 
+    ProxyPool --> Fetcher
     Fetcher --> Connector
     Status --> Connector
     Connector --> Resolver
