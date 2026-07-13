@@ -5,11 +5,13 @@ Licensed under the MIT License.
 """
 
 import asyncio
+import datetime
 import inspect
 import logging
 import random
 import time
 from collections.abc import Callable
+from email.utils import parsedate_to_datetime
 from functools import partial
 from typing import Any, cast
 from urllib.parse import urlparse, urljoin
@@ -46,6 +48,37 @@ _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 # will not change - so those are returned immediately without retry.
 _RETRYABLE_STATUSES = frozenset({408, 429})
 
+# Upper bound on how long we will honour a server's Retry-After. A hostile
+# or misconfigured server could otherwise pin a worker for hours.
+MAX_RETRY_AFTER = 120.0
+
+
+def _parse_retry_after(value: object) -> float | None:
+    """Parse a Retry-After header value into a delay in seconds.
+
+    Accepts either a delta-seconds integer ("120") or an HTTP-date
+    ("Wed, 21 Oct 2015 07:28:00 GMT"), per RFC 9110. Returns None for a
+    missing, malformed, or non-string value (aiohttp returns str | None;
+    the isinstance guard also keeps mocked headers from blowing up).
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    now = datetime.datetime.now(when.tzinfo or datetime.timezone.utc)
+    return max(0.0, (when - now).total_seconds())
+
 
 class PerHostRateLimiter:
     """Enforces a minimum interval between requests to the same host.
@@ -81,6 +114,97 @@ class PerHostRateLimiter:
             if deficit > 0:
                 await asyncio.sleep(deficit)
             self._last[host] = time.monotonic()
+
+    def record(self, host: str, latency_s: float, success: bool) -> None:
+        """No-op. A fixed-rate limiter ignores per-response feedback.
+
+        Present so callers can invoke ``record`` uniformly whether or not
+        adaptive throttling is enabled (see :class:`AdaptiveRateLimiter`).
+        """
+        return None
+
+
+class AdaptiveRateLimiter:
+    """Per-host delay that adapts to observed latency and failures.
+
+    Modelled on Scrapy's AutoThrottle. After each response the target
+    delay for a host is nudged toward ``latency / target_concurrency`` so
+    a slow server is queried gently and a fast one is queried harder; a
+    failed fetch doubles the delay (hard back-off). The delay is always
+    clamped to ``[min_delay, max_delay]``, so an explicit ``--rate-limit``
+    (passed as ``min_delay``) remains a hard floor.
+    """
+
+    def __init__(
+        self,
+        *,
+        start_delay: float = 1.0,
+        min_delay: float = 0.0,
+        max_delay: float = 60.0,
+        target_concurrency: float = 1.0,
+    ) -> None:
+        self._start = max(float(start_delay), float(min_delay))
+        self._min = float(min_delay)
+        self._max = float(max_delay)
+        self._target = max(0.01, float(target_concurrency))
+        self._delays: dict[str, float] = {}
+        self._last: dict[str, float] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def wait(self, host: str) -> None:
+        if not host:
+            return
+        lock = self._locks.get(host)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[host] = lock
+        async with lock:
+            delay = self._delays.get(host, self._start)
+            if delay <= 0:
+                self._last[host] = time.monotonic()
+                return
+            last = self._last.get(host, 0.0)
+            now = time.monotonic()
+            deficit = last + delay - now
+            if deficit > 0:
+                await asyncio.sleep(deficit)
+            self._last[host] = time.monotonic()
+
+    def record(self, host: str, latency_s: float, success: bool) -> None:
+        delay = self._delays.get(host, self._start)
+        if not success:
+            # Hard back-off; ensure a real increase even from a zero floor.
+            delay = min(self._max, max(delay * 2.0, self._start, 1.0))
+        else:
+            target = latency_s / self._target
+            delay = (delay + target) / 2.0
+            delay = min(self._max, max(self._min, delay))
+        self._delays[host] = delay
+
+
+class ProxyPool:
+    """Round-robin over a list of proxy URLs to spread egress across IPs.
+
+    Returns the next proxy for each call to :meth:`next`. An empty pool
+    yields ``None`` (direct connection). Rotation is per request; combined
+    with a rate limiter keyed by ``(host, proxy)``, N proxies give up to N
+    times the polite throughput to one host while each egress IP stays
+    within the configured per-host rate.
+    """
+
+    def __init__(self, proxies: list[str]) -> None:
+        self._proxies = [p for p in proxies if p]
+        self._i = 0
+
+    def __bool__(self) -> bool:
+        return bool(self._proxies)
+
+    def next(self) -> str | None:
+        if not self._proxies:
+            return None
+        proxy = self._proxies[self._i % len(self._proxies)]
+        self._i += 1
+        return proxy
 
 
 def _build_timeout(
@@ -143,7 +267,15 @@ async def fetch_page(
                 if status >= 400:
                     retryable = status in _RETRYABLE_STATUSES or 500 <= status < 600
                     if retryable and attempt < retries:
-                        delay = random.uniform(0, 2**attempt)
+                        # Honour a server-provided Retry-After (429/503 set
+                        # it) instead of guessing; fall back to full-jitter
+                        # backoff when it is absent. Capped so a hostile
+                        # value cannot pin the worker.
+                        retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                        if retry_after is not None:
+                            delay = min(retry_after, MAX_RETRY_AFTER)
+                        else:
+                            delay = random.uniform(0, 2**attempt)
                         logger.debug(
                             "Retry %d/%d for %s after HTTP %d (waiting %.2fs)",
                             attempt + 1,
@@ -257,6 +389,9 @@ async def crawl_async(
     max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     rate_limit: float = 0,
     proxy: str | None = None,
+    proxies: list[str] | None = None,
+    auto_throttle: bool = False,
+    auto_throttle_max_delay: float = 60.0,
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
@@ -283,8 +418,18 @@ async def crawl_async(
         respect_robots: Whether to check robots.txt before fetching.
         max_urls: Stop crawling after collecting this many URLs.
         max_response_size: Skip responses larger than this (bytes).
-        rate_limit: Minimum seconds between requests (0 = no limit).
+        rate_limit: Minimum seconds between requests (0 = no limit). With a
+            proxy pool this floor is enforced per (host, proxy), so N proxies
+            give up to N times the aggregate throughput to one host while each
+            egress IP stays within the limit.
         proxy: Proxy URL (e.g. "http://proxy:8080").
+        proxies: A pool of proxy URLs rotated round-robin per request to
+            spread egress across several IPs. Overrides ``proxy`` for page
+            fetches when non-empty.
+        auto_throttle: Adapt the per-host delay to observed latency and back
+            off on failures (Scrapy-style AutoThrottle). ``rate_limit`` acts
+            as the hard floor.
+        auto_throttle_max_delay: Upper bound on the adaptive delay (seconds).
         auth: Tuple of (username, password) for HTTP basic auth.
         use_sitemap: Also parse sitemap.xml for URLs.
         include_metadata: Return UrlResult objects instead of plain strings.
@@ -323,7 +468,20 @@ async def crawl_async(
         )
     base_parsed = urlparse(url)
     base_domain = base_parsed.netloc
-    rate_limiter = PerHostRateLimiter(rate_limit)
+
+    proxy_pool = ProxyPool(proxies) if proxies else None
+
+    def _build_rate_limiter(floor: float):
+        """Adaptive or fixed limiter, using ``floor`` as the hard minimum."""
+        if auto_throttle:
+            return AdaptiveRateLimiter(
+                start_delay=max(floor, 1.0),
+                min_delay=floor,
+                max_delay=auto_throttle_max_delay,
+            )
+        return PerHostRateLimiter(floor)
+
+    rate_limiter: PerHostRateLimiter | AdaptiveRateLimiter = _build_rate_limiter(rate_limit)
     # completed: normalized URLs that were fully fetched (or permanently
     # skipped by robots.txt). This is the set persisted for resume.
     # pending: normalized URL -> (url, depth) for URLs that have been
@@ -366,7 +524,9 @@ async def crawl_async(
     )
     headers = {"User-Agent": user_agent}
 
-    if proxy:
+    if proxy_pool:
+        logger.debug("Rotating egress across %d proxies", len(proxies or []))
+    elif proxy:
         logger.debug("Using proxy %s for all outbound fetches", redact_credentials(proxy))
 
     try:
@@ -385,12 +545,13 @@ async def crawl_async(
                     read_timeout=read_timeout,
                 )
                 # Honour a robots.txt Crawl-delay by raising (never
-                # lowering) the per-host minimum interval. An explicit
-                # --rate-limit still wins if it is stricter.
+                # lowering) the per-host floor. An explicit --rate-limit still
+                # wins if it is stricter, and adaptive throttling keeps it as
+                # its hard minimum.
                 robots_delay = robots.crawl_delay()
                 if robots_delay and robots_delay > rate_limit:
                     logger.info("Honouring robots.txt Crawl-delay of %.1fs", robots_delay)
-                    rate_limiter = PerHostRateLimiter(robots_delay)
+                    rate_limiter = _build_rate_limiter(robots_delay)
 
             # Optionally fetch sitemaps: those advertised in robots.txt plus
             # the conventional /sitemap.xml. Robots.txt is the standard place
@@ -507,7 +668,13 @@ async def crawl_async(
                     _mark_done(normalized)
                     return
 
-                await rate_limiter.wait(urlparse(current_url).netloc)
+                host = urlparse(current_url).netloc
+                # Rotate egress across the proxy pool (or use the single
+                # proxy). The rate limiter keys by (host, proxy) so each
+                # egress IP is throttled independently.
+                current_proxy = proxy_pool.next() if proxy_pool else proxy
+                limiter_key = f"{host}|{current_proxy}" if current_proxy else host
+                await rate_limiter.wait(limiter_key)
 
                 logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
                 html, resp_time = await fetcher(
@@ -516,10 +683,14 @@ async def crawl_async(
                     timeout=timeout,
                     max_response_size=max_response_size,
                     retries=retries,
-                    proxy=proxy,
+                    proxy=current_proxy,
                     connect_timeout=connect_timeout,
                     read_timeout=read_timeout,
                 )
+
+                # Feed latency/outcome back so adaptive throttling can adjust
+                # this (host, proxy)'s delay. A no-op for the fixed limiter.
+                rate_limiter.record(limiter_key, resp_time / 1000.0, html is not None)
 
                 if html is None:
                     try:
@@ -684,6 +855,9 @@ def crawl(
     max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
     rate_limit: float = 0,
     proxy: str | None = None,
+    proxies: list[str] | None = None,
+    auto_throttle: bool = False,
+    auto_throttle_max_delay: float = 60.0,
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
@@ -713,6 +887,9 @@ def crawl(
             max_response_size=max_response_size,
             rate_limit=rate_limit,
             proxy=proxy,
+            proxies=proxies,
+            auto_throttle=auto_throttle,
+            auto_throttle_max_delay=auto_throttle_max_delay,
             auth=auth,
             use_sitemap=use_sitemap,
             include_metadata=include_metadata,

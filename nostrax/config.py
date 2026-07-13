@@ -27,7 +27,10 @@ CONFIG_KEYS: dict[str, type] = {
     "max_concurrent": int,
     "max_urls": int,
     "rate_limit": float,
+    "auto_throttle_max_delay": float,
     "proxy": str,
+    "proxy_file": str,
+    "input_file": str,
     "auth": str,
     "domain": str,
     "protocol": str,
@@ -54,6 +57,7 @@ BOOL_KEYS: set[str] = {
     "check_status",
     "metadata",
     "progress",
+    "auto_throttle",
 }
 
 

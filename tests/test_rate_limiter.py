@@ -5,7 +5,56 @@ import time
 
 import pytest
 
-from nostrax.crawler import PerHostRateLimiter
+from nostrax.crawler import AdaptiveRateLimiter, PerHostRateLimiter, ProxyPool
+
+
+def test_proxy_pool_round_robin():
+    pool = ProxyPool(["http://a:1", "http://b:2", "http://c:3"])
+    assert bool(pool) is True
+    got = [pool.next() for _ in range(7)]
+    assert got == [
+        "http://a:1",
+        "http://b:2",
+        "http://c:3",
+        "http://a:1",
+        "http://b:2",
+        "http://c:3",
+        "http://a:1",
+    ]
+
+
+def test_proxy_pool_empty():
+    pool = ProxyPool([])
+    assert bool(pool) is False
+    assert pool.next() is None
+
+
+def test_adaptive_limiter_backs_off_on_failure():
+    lim = AdaptiveRateLimiter(start_delay=1.0, min_delay=0.5, max_delay=10.0)
+    lim.record("h", latency_s=0.2, success=False)
+    lim.record("h", latency_s=0.2, success=False)
+    # two failures from a start of 1.0 -> ~4.0 (doubled twice), under the cap
+    assert lim._delays["h"] == pytest.approx(4.0)
+
+
+def test_adaptive_limiter_respects_floor_and_cap():
+    lim = AdaptiveRateLimiter(start_delay=1.0, min_delay=0.5, max_delay=3.0)
+    # Fast responses pull the delay down, but never below min_delay.
+    for _ in range(20):
+        lim.record("h", latency_s=0.0, success=True)
+    assert lim._delays["h"] >= 0.5
+    # A failure cannot exceed max_delay.
+    for _ in range(20):
+        lim.record("h", latency_s=0.0, success=False)
+    assert lim._delays["h"] <= 3.0
+
+
+def test_adaptive_limiter_matches_latency():
+    lim = AdaptiveRateLimiter(start_delay=1.0, min_delay=0.0, max_delay=10.0)
+    # Sustained 2s latency with target_concurrency 1.0 converges toward 2s.
+    for _ in range(30):
+        lim.record("h", latency_s=2.0, success=True)
+    assert lim._delays["h"] == pytest.approx(2.0, abs=0.1)
 
 
 @pytest.mark.asyncio
