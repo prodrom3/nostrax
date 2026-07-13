@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nostrax.status import check_url_status, check_statuses
+from nostrax.status import check_url_status
 
 
 def _make_mock_response(status=200):
@@ -49,9 +49,7 @@ async def test_check_url_status_forwards_proxy():
     mock_session = AsyncMock()
     mock_session.head = MagicMock(return_value=_make_mock_response(200))
 
-    await check_url_status(
-        mock_session, "https://example.com", proxy="http://proxy:8080"
-    )
+    await check_url_status(mock_session, "https://example.com", proxy="http://proxy:8080")
 
     _, kwargs = mock_session.head.call_args
     assert kwargs["proxy"] == "http://proxy:8080"

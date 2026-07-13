@@ -9,13 +9,15 @@ import asyncio
 import logging
 import os
 import sys
+from typing import cast
 
 from nostrax import __version__
 from nostrax.config import load_config, merge_config, user_provided_attrs
-from nostrax.crawler import crawl_async
+from nostrax.crawler import crawl_async, crawl_seeds_async
 from nostrax.exceptions import NostraxError
 from nostrax.extractor import TAG_ATTRS
 from nostrax.validation import (
+    is_path_within,
     validate_header_value,
     validate_proxy_url,
     validate_target_url,
@@ -36,7 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Extract URLs and paths from web pages.",
     )
     parser.add_argument(
-        "-V", "--version",
+        "-V",
+        "--version",
         action="version",
         version=f"nostrax {__version__}",
     )
@@ -46,18 +49,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check PyPI for a newer version and exit",
     )
     parser.add_argument(
-        "-t", "--target",
+        "-t",
+        "--target",
         type=str,
         default=None,
         help="Target URL to extract from",
     )
     parser.add_argument(
-        "-s", "--silent",
+        "--input-file",
+        type=str,
+        default=None,
+        help="Read seed URLs from a file, one per line ('-' for stdin; "
+        "blank lines and lines starting with # are ignored). Each seed "
+        "is crawled independently and the results are merged.",
+    )
+    parser.add_argument(
+        "-s",
+        "--silent",
         action="store_true",
         help="Suppress all output (exit code only)",
     )
     parser.add_argument(
-        "-d", "--depth",
+        "-d",
+        "--depth",
         type=int,
         default=0,
         help="Recursion depth for crawling (default: 0, no recursion)",
@@ -104,14 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sort URLs alphabetically",
     )
     parser.add_argument(
-        "-f", "--format",
+        "-f",
+        "--format",
         type=str,
-        choices=["plain", "json", "csv", "html"],
+        choices=["plain", "json", "jsonl", "csv", "html", "dot", "graphml"],
         default="plain",
-        help="Output format (default: plain)",
+        help="Output format (default: plain). jsonl = one JSON record per "
+        "line; dot/graphml = source->url link graph.",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=str,
         default=None,
         help="Write output to file instead of stdout",
@@ -141,7 +158,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Custom User-Agent string",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Enable verbose logging",
     )
@@ -246,6 +264,25 @@ def _parse_auth(auth_str: str) -> tuple[str, str]:
     return (user, password)
 
 
+def _read_seeds(path: str) -> list[str]:
+    """Read seed URLs from a file (or stdin when path is '-').
+
+    One URL per line; blank lines and lines starting with '#' are skipped.
+    """
+    if path == "-":
+        text = sys.stdin.read()
+    else:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    seeds = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        seeds.append(line)
+    return seeds
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -265,13 +302,39 @@ def main(argv: list[str] | None = None) -> int:
             provided = user_provided_attrs(parser, argv)
             merge_config(args, config, provided)
 
-    if args.target is None:
-        parser.error("the following arguments are required: -t/--target")
+    # Assemble the seed list. --target and --input-file may be combined;
+    # target (if any) is crawled first. Each seed is validated for SSRF and
+    # unsafe seeds are skipped with a warning rather than aborting the run.
+    seeds: list[str] = []
+    if args.input_file:
+        try:
+            file_seeds = _read_seeds(args.input_file)
+        except OSError as e:
+            parser.error(f"--input-file: {e}")
+        raw_seeds = ([args.target] if args.target else []) + file_seeds
+        for s in raw_seeds:
+            err = validate_target_url(s)
+            if err:
+                logging.getLogger(__name__).warning("Skipping seed %s: %s", s, err)
+                continue
+            if s not in seeds:
+                seeds.append(s)
+        if not seeds:
+            parser.error("--input-file: no valid seed URLs found")
+        if args.cache_dir:
+            parser.error("--cache-dir cannot be combined with --input-file")
+    else:
+        if args.target is None:
+            parser.error("the following arguments are required: -t/--target")
+        err = validate_target_url(args.target)
+        if err:
+            parser.error(f"--target: {err}")
+        seeds = [args.target]
 
-    # Validate inputs
-    err = validate_target_url(args.target)
-    if err:
-        parser.error(f"--target: {err}")
+    # Base URL used for internal/external domain filtering.
+    filter_base = args.target or seeds[0]
+
+    # Validate remaining inputs
     if args.proxy:
         err = validate_proxy_url(args.proxy)
         if err:
@@ -327,37 +390,48 @@ def main(argv: list[str] | None = None) -> int:
                 "tqdm not installed, progress bar disabled. Install with: pip install tqdm"
             )
 
-    # Whether we need metadata from the crawler
-    need_metadata = args.metadata or args.check_status or args.format == "html"
+    # Formats that render a whole document (need the UrlResult metadata:
+    # the graph formats need each result's source page to build edges).
+    document_formats = {"html", "dot", "graphml"}
+    need_metadata = args.metadata or args.check_status or args.format in document_formats
 
-    # Crawl
+    # Crawl. crawl_async keywords are shared between the single-target and
+    # multi-seed paths; only the seed source and cache/progress differ.
+    crawl_kwargs = dict(
+        depth=args.depth,
+        tags=tags,
+        deduplicate=not args.no_dedup,
+        timeout=args.timeout,
+        connect_timeout=args.connect_timeout,
+        read_timeout=args.read_timeout,
+        user_agent=args.user_agent,
+        max_concurrent=args.max_concurrent,
+        respect_robots=args.respect_robots,
+        max_urls=args.max_urls,
+        rate_limit=args.rate_limit,
+        proxy=args.proxy,
+        auth=auth,
+        use_sitemap=args.sitemap,
+        include_metadata=need_metadata,
+        retries=args.retries,
+        scope=args.scope,
+        strategy=args.strategy,
+        check_status=args.check_status,
+    )
     try:
-        results = asyncio.run(
-            crawl_async(
-                args.target,
-                depth=args.depth,
-                tags=tags,
-                deduplicate=not args.no_dedup,
-                timeout=args.timeout,
-                connect_timeout=args.connect_timeout,
-                read_timeout=args.read_timeout,
-                user_agent=args.user_agent,
-                max_concurrent=args.max_concurrent,
-                respect_robots=args.respect_robots,
-                max_urls=args.max_urls,
-                rate_limit=args.rate_limit,
-                proxy=args.proxy,
-                auth=auth,
-                use_sitemap=args.sitemap,
-                include_metadata=need_metadata,
-                progress_callback=progress_callback,
-                retries=args.retries,
-                scope=args.scope,
-                strategy=args.strategy,
-                cache_dir=args.cache_dir,
-                check_status=args.check_status,
+        if len(seeds) > 1 or args.input_file:
+            results = asyncio.run(
+                crawl_seeds_async(seeds, progress_callback=progress_callback, **crawl_kwargs)
             )
-        )
+        else:
+            results = asyncio.run(
+                crawl_async(
+                    seeds[0],
+                    progress_callback=progress_callback,
+                    cache_dir=args.cache_dir,
+                    **crawl_kwargs,
+                )
+            )
     except NostraxError as e:
         logging.getLogger(__name__).error("%s", e)
         return 1
@@ -377,14 +451,17 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger(__name__).warning("No URLs found.")
         return 1
 
-    # Extract plain URL list for filtering
+    # Split the crawl output into cleanly-typed views: a UrlResult list when
+    # metadata was requested, and a plain URL list for filtering either way.
     if need_metadata:
-        url_list = [r.url for r in results]
+        meta_results = cast("list[UrlResult]", results)
+        url_list: list[str] = [r.url for r in meta_results]
     else:
-        url_list = results
+        meta_results = []
+        url_list = cast("list[str]", results)
 
     # Apply filters
-    url_list = filter_by_domain(url_list, args.target, mode=args.domain)
+    url_list = filter_by_domain(url_list, filter_base, mode=args.domain)
     if args.protocol:
         protocols = {p.strip() for p in args.protocol.split(",")}
         url_list = filter_by_protocol(url_list, protocols)
@@ -396,11 +473,11 @@ def main(argv: list[str] | None = None) -> int:
     # If metadata mode, filter UrlResult list to match filtered URL list
     if need_metadata:
         kept = set(url_list)
-        results = [r for r in results if r.url in kept]
+        meta_results = [r for r in meta_results if r.url in kept]
 
     if args.sort:
         if need_metadata:
-            results.sort(key=lambda r: r.url)
+            meta_results.sort(key=lambda r: r.url)
         else:
             url_list.sort()
 
@@ -409,30 +486,31 @@ def main(argv: list[str] | None = None) -> int:
     # off the UrlResult objects here.
     statuses: dict[str, int | None] | None = None
     if args.check_status and need_metadata:
-        statuses = {r.url: r.status for r in results}
+        statuses = {r.url: r.status for r in meta_results}
 
     # Output
     if not args.silent:
-        if args.format == "html":
-            from nostrax.report import generate_html_report
+        if args.format in document_formats:
+            doc_results = meta_results if need_metadata else [UrlResult(url=u) for u in url_list]
+            if args.format == "html":
+                from nostrax.report import generate_html_report
 
-            html_results = results if need_metadata else [UrlResult(url=u) for u in url_list]
-            html_content = generate_html_report(html_results, args.target, statuses=statuses)
+                content = generate_html_report(
+                    doc_results, args.target or ", ".join(seeds), statuses=statuses
+                )
+            elif args.format == "dot":
+                from nostrax.graph import generate_dot
 
-            if args.output:
-                output_path = os.path.realpath(args.output)
-                cwd = os.path.realpath(os.getcwd())
-                if not output_path.startswith(cwd + os.sep) and output_path != cwd:
-                    logging.getLogger(__name__).error(
-                        "Refusing to write outside working directory: %s", args.output
-                    )
-                    return 1
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
-            else:
-                sys.stdout.write(html_content)
+                content = generate_dot(doc_results)
+            else:  # graphml
+                from nostrax.graph import generate_graphml
+
+                content = generate_graphml(doc_results)
+
+            if not _write_document(content, args.output):
+                return 1
         else:
-            output_data = results if need_metadata else url_list
+            output_data: list[str] | list[UrlResult] = meta_results if need_metadata else url_list
             write_output(
                 output_data,
                 fmt=args.format,
@@ -442,6 +520,25 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     return 0
+
+
+def _write_document(content: str, output_file: str | None) -> bool:
+    """Write a whole-document format to a file (cwd-confined) or stdout.
+
+    Returns False if a requested file path escapes the working directory.
+    """
+    if output_file:
+        output_path = os.path.realpath(output_file)
+        if not is_path_within(output_path, os.getcwd()):
+            logging.getLogger(__name__).error(
+                "Refusing to write outside working directory: %s", output_file
+            )
+            return False
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(content)
+    else:
+        sys.stdout.write(content)
+    return True
 
 
 if __name__ == "__main__":

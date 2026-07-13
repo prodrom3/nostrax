@@ -22,8 +22,15 @@ def test_custom_fetcher_replaces_default():
     seen: list[str] = []
 
     async def my_fetcher(
-        session, url, *, timeout, max_response_size, retries,
-        proxy, connect_timeout, read_timeout,
+        session,
+        url,
+        *,
+        timeout,
+        max_response_size,
+        retries,
+        proxy,
+        connect_timeout,
+        read_timeout,
     ):
         seen.append(url)
         return "<html><a href='/next'>n</a></html>", 10.0
@@ -45,8 +52,15 @@ def test_custom_extractor_replaces_default():
 
     # Stub the fetcher too so we do not need a mock aiohttp response
     async def stub_fetcher(
-        session, url, *, timeout, max_response_size, retries,
-        proxy, connect_timeout, read_timeout,
+        session,
+        url,
+        *,
+        timeout,
+        max_response_size,
+        retries,
+        proxy,
+        connect_timeout,
+        read_timeout,
     ):
         return "<body>whatever</body>", 5.0
 
@@ -66,7 +80,13 @@ def test_async_extractor_is_refused_with_a_pointed_error():
     the crawler must refuse it up front rather than let it explode later."""
 
     async def async_extractor(
-        html, base_url, *, tags, deduplicate, include_metadata, depth,
+        html,
+        base_url,
+        *,
+        tags,
+        deduplicate,
+        include_metadata,
+        depth,
     ):
         return []
 
@@ -87,8 +107,15 @@ def test_extractor_returning_strings_fails_fast_with_clear_error():
         return ["https://example.com/x"]
 
     async def stub_fetcher(
-        session, url, *, timeout, max_response_size, retries,
-        proxy, connect_timeout, read_timeout,
+        session,
+        url,
+        *,
+        timeout,
+        max_response_size,
+        retries,
+        proxy,
+        connect_timeout,
+        read_timeout,
     ):
         return "<body>x</body>", 1.0
 
@@ -106,8 +133,15 @@ def test_default_fetcher_and_extractor_still_work_when_unset():
     """Omitting both arguments uses the built-in fetch_page + extract_urls."""
 
     async def passthrough_fetcher(
-        session, url, *, timeout, max_response_size, retries,
-        proxy, connect_timeout, read_timeout,
+        session,
+        url,
+        *,
+        timeout,
+        max_response_size,
+        retries,
+        proxy,
+        connect_timeout,
+        read_timeout,
     ):
         # Use the real HTML that the default extractor knows how to handle.
         return '<html><body><a href="/page">x</a></body></html>', 1.0

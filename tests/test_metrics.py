@@ -100,6 +100,7 @@ def test_metrics_sink_receives_on_robots_blocked():
         robots = RobotsClass.return_value
         robots.load = AsyncMock()
         robots.is_allowed = MagicMock(return_value=False)
+        robots.crawl_delay = MagicMock(return_value=None)
 
         with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
             mock_session = AsyncMock()

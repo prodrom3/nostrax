@@ -10,6 +10,7 @@ Licensed under the MIT License.
 import argparse
 import logging
 import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +71,12 @@ def _find_config_file() -> str | None:
 
 def _parse_toml(path: str) -> dict:
     """Parse a TOML file via stdlib tomllib (3.11+) or the tomli backport (3.10)."""
-    try:
+    # A version_info guard (rather than try/except) lets type checkers see
+    # the two imports as mutually exclusive, so there is no redefinition.
+    if sys.version_info >= (3, 11):
         import tomllib
-    except ImportError:
-        import tomli as tomllib  # pyproject.toml pins this on Python < 3.11
+    else:
+        import tomli as tomllib
     with open(path, "rb") as f:
         return tomllib.load(f)
 
@@ -96,9 +99,7 @@ def load_config() -> dict:
         return {}
 
 
-def user_provided_attrs(
-    parser: argparse.ArgumentParser, argv: list[str] | None
-) -> set[str]:
+def user_provided_attrs(parser: argparse.ArgumentParser, argv: list[str] | None) -> set[str]:
     """Return the set of ``dest`` names the user explicitly passed on argv.
 
     Done by temporarily setting every action's default to ``argparse.SUPPRESS``
@@ -118,9 +119,7 @@ def user_provided_attrs(
     return set(vars(ns).keys())
 
 
-def merge_config(
-    args: object, config: dict, provided: set[str]
-) -> None:
+def merge_config(args: object, config: dict, provided: set[str]) -> None:
     """Apply config values to ``args`` for keys the user did not pass on argv.
 
     ``provided`` is the set of ``dest`` names the user explicitly supplied

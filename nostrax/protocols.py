@@ -35,8 +35,7 @@ class Fetcher(Protocol):
         proxy: str | None,
         connect_timeout: float | None,
         read_timeout: float | None,
-    ) -> tuple[str | None, float]:
-        ...
+    ) -> tuple[str | None, float]: ...
 
 
 class Extractor(Protocol):
@@ -65,5 +64,4 @@ class Extractor(Protocol):
         deduplicate: bool,
         include_metadata: bool,
         depth: int,
-    ) -> list[str] | list[UrlResult]:
-        ...
+    ) -> list[str] | list[UrlResult]: ...

@@ -53,19 +53,13 @@ def check_update() -> str:
     latest = get_latest_version()
 
     if latest is None:
-        return (
-            f"nostrax {__version__} (installed)\n"
-            "Could not reach PyPI to check for updates."
-        )
+        return f"nostrax {__version__} (installed)\nCould not reach PyPI to check for updates."
 
     try:
         current = parse_version(__version__)
         remote = parse_version(latest)
     except InvalidVersion:
-        return (
-            f"nostrax {__version__} (installed)\n"
-            f"Could not parse version: {latest}"
-        )
+        return f"nostrax {__version__} (installed)\nCould not parse version: {latest}"
 
     if remote > current:
         return (
@@ -76,7 +70,4 @@ def check_update() -> str:
     elif remote == current:
         return f"nostrax {__version__} - up to date."
     else:
-        return (
-            f"nostrax {__version__} (installed, newer than PyPI)\n"
-            f"nostrax {latest} (PyPI)"
-        )
+        return f"nostrax {__version__} (installed, newer than PyPI)\nnostrax {latest} (PyPI)"

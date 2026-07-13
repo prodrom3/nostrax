@@ -12,6 +12,27 @@ are included in the first 2.0.0 artifact.
 
 ### Added
 
+- **True resumable crawl.** The pending frontier is now persisted to
+  `frontier.json` and the visited/completed set is recorded only *after*
+  a successful fetch. A crawl interrupted with `--cache-dir` set continues
+  from its un-crawled frontier on the next run - and retries pages that
+  failed - instead of only reloading the results it had already collected.
+- **Seed-list input.** `--input-file PATH` (`-` for stdin) reads one seed
+  URL per line (blank lines and `#` comments ignored). Each seed is crawled
+  independently - its own domain, scope, and robots.txt - and the results
+  are merged and de-duplicated. A dead seed is skipped, not fatal. Library:
+  `crawl_seeds` / `crawl_seeds_async`.
+- **New output formats.** `--format jsonl` (one JSON record per line, for
+  streaming into `jq -c` / log pipelines) and `--format dot` / `graphml`
+  (a `source -> url` link graph for Graphviz, Gephi, yEd, or networkx).
+- **Sitemap discovery from robots.txt.** `--sitemap` now also fetches the
+  sitemaps advertised in robots.txt `Sitemap:` directives, not just the
+  conventional `/sitemap.xml`.
+- **Playwright fetcher example** (`examples/playwright_fetcher.py`) plus a
+  `nostrax[playwright]` extra, for crawling JavaScript-rendered sites via
+  the `Fetcher` protocol.
+- **mypy type-checking** in CI (the package ships `py.typed`); a `lint`
+  job now runs ruff over `nostrax/`, `tests/`, and `examples/`.
 - Per-host rate limiting. `--rate-limit` (and the `rate_limit=` kwarg)
   now spaces requests per netloc instead of globally, so a multi-domain
   crawl asking for 1 req/s no longer caps the entire job at 1 req/s.
@@ -34,12 +55,31 @@ are included in the first 2.0.0 artifact.
 - Extraction now covers `<img srcset>`, `<source srcset>`, and
   `<meta http-equiv="refresh">` targets. `<base href>` is honoured when
   resolving relative URLs.
-- GitHub Actions CI matrix: Python 3.10-3.14 on Linux, plus 3.13 on
-  macOS and Windows.
+- GitHub Actions CI matrix: Python 3.10-3.14 on Linux, plus 3.10 and
+  3.13 on macOS and Windows.
 - PEP 561 `py.typed` marker so downstream type checkers pick up the
   shipped annotations.
+- **robots.txt `Crawl-delay` is honoured** under `--respect-robots`: the
+  per-host minimum interval is raised to the delay the site declares
+  (never lowered below an explicit `--rate-limit`). Fractional delays
+  like `Crawl-delay: 0.5` are supported, which stdlib's parser silently
+  drops.
+- Ruff lint gate in CI (`[tool.ruff]` config + a dedicated `lint` job),
+  plus a `ruff format --check` gate. The codebase was formatted with
+  `ruff format`; that bulk commit is listed in `.git-blame-ignore-revs`
+  so `git blame` skips it.
+- Richer packaging metadata in `pyproject.toml`: trove classifiers,
+  `project.urls` (Homepage/Repository/Issues/Changelog), and keywords.
 
 ### Changed
+
+- Extraction makes a **single document-order pass** over all requested
+  tags instead of one full tree traversal per tag. With `--all-tags`
+  this is one walk instead of ten, and results now reflect document
+  order across tag types.
+- `normalize_url` is memoised (bounded LRU). It is called two-to-three
+  times per URL on the crawl hot paths (scope check, visited check,
+  final dedup); repeats are now dict lookups.
 
 - DFS and BFS now share a single engine: a frontier queue
   (`LifoQueue` or `Queue`) plus a worker pool of `max_concurrent`
@@ -65,6 +105,23 @@ are included in the first 2.0.0 artifact.
 
 ### Fixed
 
+- **Deterministic 4xx no longer retried**: `fetch_page` inspects the
+  status directly and retries only transient failures (408, 429, 5xx).
+  Previously `raise_for_status` turned every 404/403/410 into a
+  `ClientError` that burned the full retry budget with backoff sleeps on
+  a result that could never change.
+- **IPv6 hosts normalise correctly**: `normalize_url` keeps the bracket
+  form, so `http://[::1]:8080/x` no longer collapses to the malformed
+  `http://::1:8080/x` and dedup/scope checks work for IPv6 URLs.
+- **Case-insensitive scheme filtering**: `JavaScript:` / `MAILTO:`
+  (any case) and `vbscript:` pseudo-URLs are now dropped like their
+  lowercase forms instead of leaking into results.
+- **Lenient `<meta http-equiv="refresh">` parsing**: whitespace around
+  the `url=` separator (`content="5; url = /x"`) is now tolerated.
+- **Path containment hardened**: file/cache write confinement uses
+  `os.path.commonpath` on case-normalised, fully-resolved paths, fixing
+  the `/base` vs `/base-evil` prefix ambiguity and correctly handling
+  case-insensitive filesystems and separate Windows drives.
 - **DNS rebinding TOCTOU**: a custom aiohttp resolver
   (`SafeResolver`) re-applies the SSRF classifier on every DNS
   resolution, closing the window between CLI-time validation and

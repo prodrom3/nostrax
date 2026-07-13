@@ -13,7 +13,7 @@ except _metadata.PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
 from nostrax.extractor import extract_urls
-from nostrax.crawler import crawl, crawl_async
+from nostrax.crawler import crawl, crawl_async, crawl_seeds, crawl_seeds_async
 from nostrax.models import UrlResult
 from nostrax.normalize import normalize_url
 from nostrax.exceptions import NostraxError
@@ -22,6 +22,8 @@ __all__ = [
     "extract_urls",
     "crawl",
     "crawl_async",
+    "crawl_seeds",
+    "crawl_seeds_async",
     "UrlResult",
     "normalize_url",
     "NostraxError",

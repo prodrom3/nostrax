@@ -51,6 +51,16 @@ def test_identical_urls_normalize_same():
     assert len(normalized) == 1
 
 
+def test_ipv6_host_keeps_brackets():
+    # Without brackets the rebuilt URL would be the malformed
+    # "http://::1:8080/path"; the port must stay attached to the literal.
+    assert normalize_url("http://[::1]:8080/path") == "http://[::1]:8080/path"
+
+
+def test_ipv6_host_default_port_dropped():
+    assert normalize_url("https://[2001:db8::1]:443/x") == "https://[2001:db8::1]/x"
+
+
 def test_strips_credentials():
     result = normalize_url("https://user:pass@example.com/page")
     assert "user" not in result

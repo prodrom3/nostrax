@@ -11,8 +11,10 @@ import logging
 import os
 import sys
 from dataclasses import replace
+from typing import cast
 
 from nostrax.models import UrlResult
+from nostrax.validation import is_path_within
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ def format_urls(
 
     Args:
         urls: List of URL strings or UrlResult objects.
-        fmt: One of "plain", "json", "csv".
+        fmt: One of "plain", "json", "jsonl", "csv".
         include_metadata: Include source/tag/depth in output.
         statuses: Optional dict of URL -> HTTP status code.
 
@@ -40,9 +42,9 @@ def format_urls(
     # always work on shallow copies here.
     results: list[UrlResult]
     if urls and isinstance(urls[0], str):
-        results = [UrlResult(url=u) for u in urls]
+        results = [UrlResult(url=u) for u in cast("list[str]", urls)]
     else:
-        results = [replace(r) for r in urls]  # type: ignore[arg-type]
+        results = [replace(r) for r in cast("list[UrlResult]", urls)]
 
     if statuses:
         for r in results:
@@ -73,6 +75,15 @@ def format_urls(
             return json.dumps([r.to_dict() for r in results], indent=2)
         return json.dumps([r.url for r in results], indent=2)
 
+    elif fmt == "jsonl":
+        # One JSON value per line (JSON Lines). Streams cleanly into jq -c,
+        # log pipelines, and append-only sinks without loading the whole
+        # array. Objects when metadata/status is present, bare URL strings
+        # otherwise - mirroring the "json" format's shape line by line.
+        if include_metadata or statuses:
+            return "\n".join(json.dumps(r.to_dict()) for r in results)
+        return "\n".join(json.dumps(r.url) for r in results)
+
     elif fmt == "csv":
         buf = io.StringIO()
         if include_metadata or statuses:
@@ -93,10 +104,10 @@ def format_urls(
                     row["status"] = r.status
                 writer.writerow(row)
         else:
-            writer = csv.writer(buf)
-            writer.writerow(["url"])
+            row_writer = csv.writer(buf)
+            row_writer.writerow(["url"])
             for r in results:
-                writer.writerow([r.url])
+                row_writer.writerow([r.url])
         return buf.getvalue().rstrip("\n")
 
     else:
@@ -113,7 +124,8 @@ def write_output(
 ) -> None:
     """Format URLs and write to stdout or a file."""
     formatted = format_urls(
-        urls, fmt,
+        urls,
+        fmt,
         include_metadata=include_metadata,
         statuses=statuses,
     )
@@ -122,11 +134,8 @@ def write_output(
 
     if output_file:
         output_path = os.path.realpath(output_file)
-        cwd = os.path.realpath(os.getcwd())
-        if not output_path.startswith(cwd + os.sep) and output_path != cwd:
-            logger.error(
-                "Refusing to write outside working directory: %s", output_file
-            )
+        if not is_path_within(output_path, os.getcwd()):
+            logger.error("Refusing to write outside working directory: %s", output_file)
             return
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(formatted + "\n")

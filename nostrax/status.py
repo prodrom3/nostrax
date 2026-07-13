@@ -60,9 +60,7 @@ async def check_statuses(
     semaphore = asyncio.Semaphore(max_concurrent)
     results: dict[str, int | None] = {}
 
-    connector = aiohttp.TCPConnector(
-        limit=max_concurrent, resolver=SafeResolver()
-    )
+    connector = aiohttp.TCPConnector(limit=max_concurrent, resolver=SafeResolver())
     headers = {"User-Agent": user_agent}
 
     async with aiohttp.ClientSession(
@@ -70,10 +68,12 @@ async def check_statuses(
         headers=headers,
         auth=auth,
     ) as session:
+
         async def _check(url: str) -> None:
             async with semaphore:
                 results[url] = await check_url_status(
-                    session, url,
+                    session,
+                    url,
                     timeout=timeout,
                     proxy=proxy,
                     connect_timeout=connect_timeout,

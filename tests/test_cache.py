@@ -29,12 +29,45 @@ def test_cache_mark_and_save_visited(tmp_path, monkeypatch):
     assert "https://example.com/page2" in cache2.visited
 
 
+def test_cache_save_and_load_frontier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+
+    cache.save_frontier([("https://example.com/a", 1), ("https://example.com/b", 2)])
+
+    cache2 = CrawlCache(str(tmp_path))
+    cache2.initialize()
+    assert cache2.load_frontier() == [
+        ("https://example.com/a", 1),
+        ("https://example.com/b", 2),
+    ]
+
+
+def test_cache_load_frontier_missing_is_empty(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    assert cache.load_frontier() == []
+
+
+def test_cache_clear_removes_frontier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cache = CrawlCache(str(tmp_path))
+    cache.initialize()
+    cache.save_frontier([("https://example.com/a", 1)])
+    cache.clear()
+    assert cache.load_frontier() == []
+
+
 def test_cache_save_and_load_results(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache = CrawlCache(str(tmp_path))
     cache.initialize()
 
-    cache.save_result(UrlResult(url="https://example.com/a", source="https://example.com", tag="a", depth=0))
+    cache.save_result(
+        UrlResult(url="https://example.com/a", source="https://example.com", tag="a", depth=0)
+    )
     cache.save_result(UrlResult(url="https://example.com/b", tag="img", depth=1))
 
     results = cache.load_results()
@@ -48,15 +81,19 @@ def test_cache_round_trip_preserves_status_and_response_time(tmp_path, monkeypat
     cache = CrawlCache(str(tmp_path))
     cache.initialize()
 
-    cache.save_result(UrlResult(
-        url="https://example.com/a",
-        status=200,
-        response_time=142.3,
-    ))
-    cache.save_result(UrlResult(
-        url="https://example.com/b",
-        status=404,
-    ))
+    cache.save_result(
+        UrlResult(
+            url="https://example.com/a",
+            status=200,
+            response_time=142.3,
+        )
+    )
+    cache.save_result(
+        UrlResult(
+            url="https://example.com/b",
+            status=404,
+        )
+    )
 
     results = cache.load_results()
     assert results[0].status == 200
@@ -159,6 +196,7 @@ def test_save_visited_preserves_prior_file_if_rename_fails(tmp_path, monkeypatch
     cache.mark_visited("https://example.com/second")
     monkeypatch.setattr("os.replace", _boom)
     import pytest
+
     with pytest.raises(OSError):
         cache.save_visited()
 
@@ -176,5 +214,6 @@ def _boom(*args, **kwargs):
 def test_cache_rejects_path_traversal(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import pytest
+
     with pytest.raises(ValueError, match="must be under"):
         CrawlCache(str(tmp_path / ".." / "evil_cache"))

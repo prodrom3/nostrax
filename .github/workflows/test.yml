@@ -14,6 +14,27 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install package with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check nostrax/ tests/ examples/
+      - name: Format check (ruff)
+        run: ruff format --check nostrax/ tests/ examples/
+      - name: Type-check (mypy)
+        run: mypy
+
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -27,8 +48,15 @@ jobs:
           # lag for the newest interpreter.
           - os: ubuntu-latest
             python-version: '3.14'
+          # Exercise both the oldest (tomli backport, older asyncio) and a
+          # current interpreter on macOS and Windows so platform-specific
+          # path/encoding/event-loop breakage is caught, not just 3.13.
+          - os: macos-latest
+            python-version: '3.10'
           - os: macos-latest
             python-version: '3.13'
+          - os: windows-latest
+            python-version: '3.10'
           - os: windows-latest
             python-version: '3.13'
     steps:

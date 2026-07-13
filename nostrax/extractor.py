@@ -7,7 +7,7 @@ Licensed under the MIT License.
 import logging
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup, SoupStrainer
+from bs4 import BeautifulSoup, SoupStrainer, Tag
 
 from nostrax.models import UrlResult
 
@@ -35,8 +35,14 @@ _SRCSET_TAGS = frozenset({"img", "source"})
 # Default: only extract <a> tags
 DEFAULT_TAGS: set[str] = {"a"}
 
-# Prefixes to skip - not useful URLs
-_SKIP_PREFIXES = ("javascript:", "mailto:", "tel:", "#", "data:")
+# Prefixes to skip - not useful URLs. Compared case-insensitively so
+# "JavaScript:" / "MAILTO:" are skipped too (schemes are case-insensitive).
+_SKIP_PREFIXES = ("javascript:", "vbscript:", "mailto:", "tel:", "#", "data:")
+
+
+def _should_skip(value: str) -> bool:
+    """True if ``value`` is a non-navigable pseudo-URL we should drop."""
+    return value.lower().startswith(_SKIP_PREFIXES)
 
 
 def _parse_srcset(value: str) -> list[str]:
@@ -68,30 +74,44 @@ def _parse_meta_refresh(content: str) -> str | None:
     semi = content.find(";")
     if semi < 0:
         return None
-    rest = content[semi + 1:].strip()
-    if rest[:4].lower() != "url=":
+    rest = content[semi + 1 :].strip()
+    # Accept "url=x", "URL = x", "url =x" - browsers tolerate whitespace
+    # around the '=' and any case for the "url" key.
+    if rest[:3].lower() != "url":
         return None
-    url = rest[4:].strip().strip('"').strip("'")
+    after = rest[3:].lstrip()
+    if not after.startswith("="):
+        return None
+    url = after[1:].strip().strip('"').strip("'")
     return url or None
 
 
 def _urls_for_element(element, tag_name: str) -> list[str]:
-    """Return every URL-bearing attribute value on ``element``."""
+    """Return every URL-bearing attribute value on ``element``.
+
+    bs4 can return a list for multi-valued attributes, so each attribute
+    read is guarded with ``isinstance(..., str)``; the URL attributes we
+    care about (href/src/action/content) are always single-valued.
+    """
     if tag_name == "meta":
-        if (element.get("http-equiv") or "").lower() != "refresh":
+        http_equiv = element.get("http-equiv")
+        if not isinstance(http_equiv, str) or http_equiv.lower() != "refresh":
             return []
-        url = _parse_meta_refresh(element.get("content") or "")
+        content = element.get("content")
+        if not isinstance(content, str):
+            return []
+        url = _parse_meta_refresh(content)
         return [url] if url else []
 
     values: list[str] = []
     attr = TAG_ATTRS.get(tag_name)
     if attr:
         v = element.get(attr)
-        if v:
+        if isinstance(v, str) and v:
             values.append(v)
     if tag_name in _SRCSET_TAGS:
         srcset = element.get("srcset")
-        if srcset:
+        if isinstance(srcset, str) and srcset:
             values.extend(_parse_srcset(srcset))
     return values
 
@@ -129,37 +149,44 @@ def extract_urls(
 
     resolved_base = base_url
     base_el = soup.find("base")
-    if base_el is not None:
-        href = (base_el.get("href") or "").strip()
-        if href:
-            resolved_base = urljoin(base_url, href)
+    if isinstance(base_el, Tag):
+        href = base_el.get("href")
+        if isinstance(href, str) and href.strip():
+            resolved_base = urljoin(base_url, href.strip())
 
     results: list[UrlResult] = []
     seen: set[str] = set()
 
-    for tag_name in tags:
-        if tag_name not in TAG_ATTRS:
-            logger.warning("Unsupported tag: %s", tag_name)
-            continue
+    valid_tags = [t for t in tags if t in TAG_ATTRS]
+    for t in tags:
+        if t not in TAG_ATTRS:
+            logger.warning("Unsupported tag: %s", t)
 
-        for element in soup.find_all(tag_name):
-            for value in _urls_for_element(element, tag_name):
-                value = value.strip()
-                if not value or value.startswith(_SKIP_PREFIXES):
+    # Single document-order pass over all requested tags instead of one
+    # full tree traversal per tag. lxml's find_all with a tag list walks
+    # the tree once and yields elements in the order they appear, which
+    # also makes the output reflect document order across tag types.
+    for element in soup.find_all(valid_tags):
+        tag_name = element.name
+        for value in _urls_for_element(element, tag_name):
+            value = value.strip()
+            if not value or _should_skip(value):
+                continue
+            absolute_url = urljoin(resolved_base, value)
+
+            if deduplicate:
+                if absolute_url in seen:
                     continue
-                absolute_url = urljoin(resolved_base, value)
+                seen.add(absolute_url)
 
-                if deduplicate:
-                    if absolute_url in seen:
-                        continue
-                    seen.add(absolute_url)
-
-                results.append(UrlResult(
+            results.append(
+                UrlResult(
                     url=absolute_url,
                     source=base_url,
                     tag=tag_name,
                     depth=depth,
-                ))
+                )
+            )
 
     if include_metadata:
         return results

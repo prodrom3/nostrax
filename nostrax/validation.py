@@ -6,10 +6,29 @@ Licensed under the MIT License.
 
 import ipaddress
 import logging
+import os
 import socket
 from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
+
+
+def is_path_within(path: str, base: str) -> bool:
+    """Return True if ``path`` resolves to a location inside ``base``.
+
+    Both paths are fully resolved (symlinks included) and case-normalised
+    before comparison, so this is correct on case-insensitive filesystems
+    (Windows, default macOS) and immune to the ``/foo`` vs ``/foobar``
+    prefix ambiguity that a plain ``startswith`` has. Returns False when
+    the two live on different drives (Windows), which ``os.path.commonpath``
+    signals by raising ``ValueError``.
+    """
+    base_r = os.path.normcase(os.path.realpath(base))
+    path_r = os.path.normcase(os.path.realpath(path))
+    try:
+        return os.path.commonpath([path_r, base_r]) == base_r
+    except ValueError:
+        return False
 
 
 def redact_credentials(url: str | None) -> str:
@@ -32,6 +51,7 @@ def redact_credentials(url: str | None) -> str:
     return urlunparse(
         (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
     )
+
 
 _UnsafeIP = ipaddress.IPv4Address | ipaddress.IPv6Address
 

@@ -15,9 +15,7 @@ def _info(host: str, family: int = socket.AF_INET) -> dict:
 @pytest.mark.asyncio
 async def test_safe_resolver_passes_public_addresses(monkeypatch):
     r = SafeResolver()
-    monkeypatch.setattr(
-        r._inner, "resolve", AsyncMock(return_value=[_info("93.184.216.34")])
-    )
+    monkeypatch.setattr(r._inner, "resolve", AsyncMock(return_value=[_info("93.184.216.34")]))
 
     result = await r.resolve("example.com", 80)
     assert result == [_info("93.184.216.34")]
@@ -52,9 +50,7 @@ async def test_safe_resolver_raises_when_all_unsafe(monkeypatch):
 @pytest.mark.asyncio
 async def test_safe_resolver_blocks_cloud_metadata(monkeypatch):
     r = SafeResolver()
-    monkeypatch.setattr(
-        r._inner, "resolve", AsyncMock(return_value=[_info("169.254.169.254")])
-    )
+    monkeypatch.setattr(r._inner, "resolve", AsyncMock(return_value=[_info("169.254.169.254")]))
 
     with pytest.raises(OSError, match="unsafe SSRF"):
         await r.resolve("metadata.example.com", 80)

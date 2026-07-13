@@ -1,10 +1,13 @@
 """Tests for nostrax.crawler."""
 
+import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nostrax.crawler import crawl, crawl_async, fetch_page
+from nostrax.crawler import crawl, crawl_seeds, fetch_page
+from nostrax.exceptions import NostraxError
 
 
 SAMPLE_HTML = """
@@ -95,9 +98,7 @@ async def test_fetch_page_forwards_proxy_to_session():
     mock_session = AsyncMock()
     mock_session.get = MagicMock(return_value=mock_resp)
 
-    await fetch_page(
-        mock_session, "https://example.com", proxy="http://proxy:8080"
-    )
+    await fetch_page(mock_session, "https://example.com", proxy="http://proxy:8080")
 
     _, kwargs = mock_session.get.call_args
     assert kwargs["proxy"] == "http://proxy:8080"
@@ -113,8 +114,11 @@ async def test_fetch_page_applies_separated_timeouts():
     mock_session.get = MagicMock(return_value=mock_resp)
 
     await fetch_page(
-        mock_session, "https://example.com",
-        timeout=30, connect_timeout=5, read_timeout=15,
+        mock_session,
+        "https://example.com",
+        timeout=30,
+        connect_timeout=5,
+        read_timeout=15,
     )
 
     _, kwargs = mock_session.get.call_args
@@ -152,12 +156,71 @@ async def test_fetch_page_uses_full_jitter_backoff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_page_does_not_retry_client_error_status(monkeypatch):
+    """A deterministic 4xx (e.g. 404) is returned immediately without
+    burning retry/backoff cycles - it will not change on a retry."""
+    slept: list[float] = []
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    mock_resp = _make_mock_response("nope", status=404)
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    html, _ = await fetch_page(mock_session, "https://example.com", retries=3)
+    assert html is None
+    assert mock_session.get.call_count == 1  # no retries
+    assert slept == []  # no backoff sleeps
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_retries_server_error_status(monkeypatch):
+    """A 5xx is transient, so it is retried up to the retry budget."""
+
+    async def fake_sleep(delay):
+        return None
+
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    mock_resp = _make_mock_response("boom", status=503)
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    html, _ = await fetch_page(mock_session, "https://example.com", retries=2)
+    assert html is None
+    assert mock_session.get.call_count == 3  # initial + 2 retries
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_retries_429_rate_limited(monkeypatch):
+    """429 Too Many Requests is retryable even though it is a 4xx."""
+
+    async def fake_sleep(delay):
+        return None
+
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    mock_resp = _make_mock_response("slow down", status=429)
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    html, _ = await fetch_page(mock_session, "https://example.com", retries=1)
+    assert html is None
+    assert mock_session.get.call_count == 2  # initial + 1 retry
+
+
+@pytest.mark.asyncio
 async def test_fetch_page_skips_large_content_length():
     mock_resp = _make_mock_response("big", content_length=20_000_000)
     mock_session = AsyncMock()
     mock_session.get = MagicMock(return_value=mock_resp)
 
-    html, resp_time = await fetch_page(mock_session, "https://example.com", max_response_size=10_000_000)
+    html, resp_time = await fetch_page(
+        mock_session, "https://example.com", max_response_size=10_000_000
+    )
     assert html is None
 
 
@@ -184,6 +247,156 @@ def test_crawl_depth_zero():
         assert "https://example.com/page2" in urls
         assert "https://example.com/page3" in urls
         assert "https://external.com/other" in urls
+
+
+def test_crawl_honours_robots_crawl_delay():
+    """When robots.txt declares a Crawl-delay stricter than --rate-limit,
+    the crawler rebuilds its per-host limiter with the larger interval."""
+    from nostrax.crawler import PerHostRateLimiter as _RealLimiter
+
+    constructed: list[float] = []
+
+    class RecordingLimiter(_RealLimiter):
+        def __init__(self, interval):
+            constructed.append(interval)
+            super().__init__(interval)
+
+    with patch("nostrax.crawler.RobotsChecker") as RobotsClass:
+        robots = RobotsClass.return_value
+        robots.load = AsyncMock()
+        robots.is_allowed = MagicMock(return_value=True)
+        robots.crawl_delay = MagicMock(return_value=0.3)
+
+        with patch("nostrax.crawler.PerHostRateLimiter", RecordingLimiter):
+            with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
+                mock_session = AsyncMock()
+                mock_session.get = MagicMock(return_value=_make_mock_response(SAMPLE_HTML))
+                mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+                mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+                crawl("https://example.com", respect_robots=True, rate_limit=0.1)
+
+    assert 0.3 in constructed  # limiter rebuilt with the robots Crawl-delay
+
+
+def test_crawl_discovers_sitemaps_from_robots():
+    """--sitemap consults robots.txt Sitemap: directives, not just the
+    conventional /sitemap.xml path."""
+    robots_txt = "User-agent: *\nDisallow:\nSitemap: https://example.com/custom-sitemap.xml\n"
+    custom_sitemap = (
+        '<?xml version="1.0"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        "<url><loc>https://example.com/from-robots-sitemap</loc></url>"
+        "</urlset>"
+    )
+
+    def get_side_effect(url, **kwargs):
+        if url.endswith("/robots.txt"):
+            return _make_mock_response(robots_txt)
+        if url.endswith("/custom-sitemap.xml"):
+            return _make_mock_response(custom_sitemap)
+        if url.endswith("/sitemap.xml"):
+            return _make_mock_response("not xml", status=404)
+        return _make_mock_response("<html><body></body></html>")
+
+    with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
+        mock_session = AsyncMock()
+        mock_session.get = MagicMock(side_effect=get_side_effect)
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        results = crawl("https://example.com", use_sitemap=True, include_metadata=True)
+
+    urls = {r.url for r in results}
+    assert "https://example.com/from-robots-sitemap" in urls
+
+
+def test_resume_continues_interrupted_frontier(tmp_path, monkeypatch):
+    """A crawl whose pages fail mid-run persists the un-crawled frontier;
+    a resume retries them and reaches pages that were never discoverable
+    before. This is the core of true resumability (not just result reload)."""
+    monkeypatch.chdir(tmp_path)
+    cache_dir = str(tmp_path / "c")
+
+    pages = {
+        "https://site.test": '<a href="https://site.test/a">a</a>',
+        "https://site.test/a": '<a href="https://site.test/b">b</a>',
+        "https://site.test/b": "leaf",
+    }
+    fail = {"urls": {"https://site.test/a"}}
+    fetched: list[str] = []
+
+    async def fake_fetch(session, url, **kw):
+        key = url.rstrip("/")
+        if key in fail["urls"]:
+            return (None, 1.0)
+        body = pages.get(key)
+        if body is not None:
+            fetched.append(key)
+        return (body, 1.0)
+
+    # Run 1: /a fails, so /b is never discovered. /a must be persisted.
+    crawl(
+        "https://site.test",
+        depth=5,
+        cache_dir=cache_dir,
+        include_metadata=True,
+        fetcher=fake_fetch,
+    )
+    frontier = json.load(open(os.path.join(cache_dir, "frontier.json")))
+    assert ["https://site.test/a", 1] in frontier
+
+    # Run 2: failure cleared. Resume retries /a and then reaches /b.
+    fail["urls"] = set()
+    fetched.clear()
+    r2 = crawl(
+        "https://site.test",
+        depth=5,
+        cache_dir=cache_dir,
+        include_metadata=True,
+        fetcher=fake_fetch,
+    )
+    got = {r.url for r in r2}
+    assert "https://site.test/a" in fetched  # retried
+    assert "https://site.test/b" in got  # newly reached after resume
+    # Fully crawled now -> frontier cleared.
+    assert json.load(open(os.path.join(cache_dir, "frontier.json"))) == []
+
+
+def test_crawl_seeds_merges_across_domains_and_isolates_failures():
+    pages = {
+        "https://a.test": '<a href="https://a.test/1">1</a>',
+        "https://a.test/1": "leaf",
+        "https://b.test": '<a href="https://b.test/2">2</a>',
+        "https://b.test/2": "leaf",
+    }
+
+    async def fake_fetch(session, url, **kw):
+        return (pages.get(url.rstrip("/")), 1.0)
+
+    res = crawl_seeds(
+        ["https://a.test", "https://b.test", "https://dead.test"],
+        depth=2,
+        include_metadata=True,
+        fetcher=fake_fetch,
+    )
+    urls = {r.url for r in res}
+    assert "https://a.test/1" in urls  # from seed 1's domain
+    assert "https://b.test/2" in urls  # from seed 2's domain (multi-domain)
+    # The dead seed was skipped, not fatal.
+
+
+def test_crawl_seeds_all_fail_raises():
+    async def fake_fetch(session, url, **kw):
+        return (None, 1.0)
+
+    with pytest.raises(NostraxError):
+        crawl_seeds(["https://dead1.test", "https://dead2.test"], fetcher=fake_fetch)
+
+
+def test_crawl_seeds_rejects_cache_dir():
+    with pytest.raises(ValueError):
+        crawl_seeds(["https://a.test"], cache_dir="cache")
 
 
 def test_crawl_depth_one():
@@ -233,8 +446,6 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cache_dir = str(tmp_path / "cache")
 
-    import aiohttp as aio
-
     class Boom(Exception):
         pass
 
@@ -244,6 +455,7 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
             raising_get.calls += 1
             return _make_mock_response(SAMPLE_HTML)
         raise Boom("simulated interrupt")
+
     raising_get.calls = 0
 
     with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
@@ -253,11 +465,13 @@ def test_crawl_saves_cache_on_unexpected_exception(tmp_path, monkeypatch):
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
         import pytest
+
         with pytest.raises(Boom):
             crawl("https://example.com", depth=1, cache_dir=cache_dir)
 
     # The visited file must exist even though the crawl raised.
     import json
+
     visited_path = tmp_path / "cache" / "visited.json"
     assert visited_path.is_file(), "visited cache was not flushed on exception"
     visited = json.loads(visited_path.read_text())
@@ -277,9 +491,7 @@ def test_crawl_check_status_attaches_status_from_same_session():
     with patch("nostrax.crawler.aiohttp.ClientSession") as mock_cls:
         mock_session = AsyncMock()
         mock_session.get = MagicMock(return_value=_make_mock_response(SAMPLE_HTML))
-        mock_session.head = MagicMock(
-            return_value=_make_mock_response("", status=204)
-        )
+        mock_session.head = MagicMock(return_value=_make_mock_response("", status=204))
         mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -320,5 +532,6 @@ def test_crawl_with_metadata():
 
         results = crawl("https://example.com", include_metadata=True)
         from nostrax.models import UrlResult
+
         assert all(isinstance(r, UrlResult) for r in results)
         assert results[0].source == "https://example.com"

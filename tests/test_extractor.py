@@ -76,13 +76,8 @@ def test_empty_base_href_is_ignored():
 
 
 def test_srcset_on_img_returns_every_candidate():
-    html = (
-        '<img src="fallback.jpg" '
-        'srcset="small.jpg 300w, medium.jpg 800w, large.jpg 1600w">'
-    )
-    urls = extract_urls(
-        html, "https://example.com/", tags={"img"}
-    )
+    html = '<img src="fallback.jpg" srcset="small.jpg 300w, medium.jpg 800w, large.jpg 1600w">'
+    urls = extract_urls(html, "https://example.com/", tags={"img"})
     assert set(urls) == {
         "https://example.com/fallback.jpg",
         "https://example.com/small.jpg",
@@ -92,11 +87,7 @@ def test_srcset_on_img_returns_every_candidate():
 
 
 def test_srcset_on_source_inside_picture():
-    html = (
-        '<picture>'
-        '<source srcset="hero@2x.webp 2x, hero.webp 1x" type="image/webp">'
-        '</picture>'
-    )
+    html = '<picture><source srcset="hero@2x.webp 2x, hero.webp 1x" type="image/webp"></picture>'
     urls = extract_urls(html, "https://example.com/", tags={"source"})
     assert set(urls) == {
         "https://example.com/hero@2x.webp",
@@ -111,12 +102,23 @@ def test_meta_refresh_extracted_from_content():
 
 
 def test_meta_refresh_case_insensitive_and_quoted():
-    html = (
-        '<meta http-equiv="Refresh" '
-        'content="0; URL=\'https://example.com/quoted\'">'
-    )
+    html = '<meta http-equiv="Refresh" content="0; URL=\'https://example.com/quoted\'">'
     urls = extract_urls(html, "https://example.com/", tags={"meta"})
     assert urls == ["https://example.com/quoted"]
+
+
+def test_meta_refresh_tolerates_spaces_around_equals():
+    html = '<meta http-equiv="refresh" content="5; url = /spaced">'
+    urls = extract_urls(html, "https://example.com/", tags={"meta"})
+    assert urls == ["https://example.com/spaced"]
+
+
+def test_skips_mixed_case_javascript_scheme():
+    # Schemes are case-insensitive; "JavaScript:" must be dropped like
+    # "javascript:" so pseudo-URLs never leak into results.
+    html = '<a href="JavaScript:alert(1)">x</a><a href="/real">y</a>'
+    urls = extract_urls(html, "https://example.com/", tags={"a"})
+    assert urls == ["https://example.com/real"]
 
 
 def test_meta_without_refresh_is_ignored():
@@ -142,6 +144,7 @@ def test_all_tags_includes_meta_and_srcset():
     assert urls == ["https://example.com/link"]
 
     from nostrax.extractor import TAG_ATTRS
+
     urls = extract_urls(html, "https://example.com/", tags=set(TAG_ATTRS))
     assert "https://example.com/m" in urls
     assert "https://example.com/a.jpg" in urls
