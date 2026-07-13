@@ -79,6 +79,8 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 - **robots.txt support** with standards-compliant URL matching, redirects disabled, and `Crawl-delay` honoured (including fractional delays) so `--respect-robots` crawls at the site's stated pace
 - **Scope control** to restrict crawling to a URL path prefix
 - **Resume from disk** via on-disk cache: the pending frontier is persisted and the visited set is recorded only after a successful fetch, so an interrupted crawl *continues* from its un-crawled frontier (and retries failed pages) rather than just reloading prior results
+- **Incremental recrawl** (`--incremental`): re-crawls using stored ETag / Last-Modified validators, so unchanged pages return `304` and are reused from cache (their links replayed to keep traversing) instead of being re-downloaded
+- **Page content scraping** (`--content`): extracts each page's title, description, canonical, language, Open Graph, and JSON-LD, not just its links
 - **Seed lists** via `--input-file` (a file or stdin): each seed is crawled independently and the results are merged and de-duplicated
 - **Sitemap discovery from robots.txt** `Sitemap:` directives, in addition to the conventional `/sitemap.xml`
 - **Graceful shutdown**: `SIGINT` (Ctrl+C) flushes the cache before exiting with code 130
@@ -442,9 +444,9 @@ usage: nostrax [-h] [-V] [--check-update] [-t TARGET] [--input-file FILE]
                [--max-concurrent N] [--respect-robots] [--max-urls N]
                [--rate-limit SECS] [--auto-throttle] [--auto-throttle-max-delay SECS]
                [--proxy URL] [--proxy-file FILE] [--auth USER:PASS]
-               [--sitemap] [--check-status] [--metadata] [--progress]
-               [--retries N] [--scope PATH] [--strategy {dfs,bfs}]
-               [--cache-dir DIR] [--no-config]
+               [--sitemap] [--check-status] [--content] [--metadata]
+               [--progress] [--retries N] [--scope PATH] [--strategy {dfs,bfs}]
+               [--cache-dir DIR] [--incremental] [--no-config]
 ```
 
 ### Options
@@ -483,6 +485,8 @@ usage: nostrax [-h] [-V] [--check-update] [-t TARGET] [--input-file FILE]
 | `--auth` | HTTP basic auth as `user:password` |
 | `--sitemap` | Also parse sitemaps (robots.txt `Sitemap:` directives + `/sitemap.xml`) |
 | `--check-status` | Check HTTP status code of each discovered URL |
+| `--content` | Scrape page metadata (title, description, canonical, OG, JSON-LD) instead of URLs |
+| `--incremental` | Recrawl with ETag/Last-Modified; reuse 304 pages from cache (needs `--cache-dir`) |
 | `--metadata` | Include source page, tag type, and depth in output |
 | `--progress` | Show a progress bar (requires `tqdm`) |
 | `--retries` | Retry attempts for failed requests (default: 2) |
@@ -587,6 +591,7 @@ flowchart TD
 | `nostrax.cli` | Command-line interface, argument parsing, input validation |
 | `nostrax.crawler` | Unified async crawl engine (frontier + worker pool), `PerHostRateLimiter` |
 | `nostrax.extractor` | HTML parsing and URL extraction (lxml + SoupStrainer, `<base>`, `srcset`, meta-refresh) |
+| `nostrax.content` | Page metadata scraping (title, description, canonical, Open Graph, JSON-LD) |
 | `nostrax.filters` | Domain, protocol, and `regex`-backed timeout-bounded filters |
 | `nostrax.output` | Output formatting (plain, JSON, JSON Lines, CSV) |
 | `nostrax.report` | HTML report generation |

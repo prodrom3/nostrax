@@ -4,14 +4,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-07-13
 
-First accumulated release after the async rewrite. Nothing in this range
-has been tagged or published; all changes landed on `main` directly and
-are included in the first 2.0.0 artifact.
+First published release, accumulating everything since the async rewrite.
 
 ### Added
 
+- **Page content extraction.** `--content` (and `collect_content=True`)
+  scrapes each page's title, meta description/keywords/robots, `<html lang>`,
+  canonical URL, Open Graph tags, and JSON-LD blocks, output as
+  plain/json/jsonl/csv. Library: `extract_content` / `PageContent`.
+- **Incremental recrawl.** `--incremental` (with `--cache-dir`) re-crawls
+  using stored ETag / Last-Modified validators: unchanged pages return
+  `304` and are reused from cache - their links replayed so the crawl keeps
+  traversing - instead of being re-downloaded and re-parsed.
 - **`Retry-After` is honoured** on `429` / `503` responses: the crawler
   waits exactly the interval the server asks for (delta-seconds or
   HTTP-date), capped at `MAX_RETRY_AFTER` (120 s), instead of guessing
