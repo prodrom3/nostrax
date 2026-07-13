@@ -41,7 +41,7 @@ A valid report includes:
 In scope:
 
 - All code under `nostrax/` in this repository.
-- The published `nostrax` wheel on PyPI (once released).
+- The published `nostrax` distributions on PyPI.
 - The CI workflow configuration at `.github/workflows/`.
 
 Out of scope:

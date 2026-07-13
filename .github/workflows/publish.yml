@@ -77,3 +77,6 @@ jobs:
           # Empty repository-url publishes to real PyPI; the TestPyPI URL is
           # used only for a manual dry-run.
           repository-url: ${{ (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') && 'https://test.pypi.org/legacy/' || '' }}
+          # Don't fail if a version was already uploaded (e.g. a tag push
+          # re-running after a manual publish of the same version).
+          skip-existing: true
