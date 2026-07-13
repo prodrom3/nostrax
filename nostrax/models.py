@@ -31,3 +31,15 @@ class UrlResult:
         if self.response_time is not None:
             d["response_time_ms"] = round(self.response_time, 1)
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UrlResult":
+        """Rebuild a UrlResult from :meth:`to_dict` output."""
+        return cls(
+            url=d["url"],
+            source=d.get("source", ""),
+            tag=d.get("tag", ""),
+            depth=d.get("depth", 0),
+            status=d.get("status"),
+            response_time=d.get("response_time_ms"),
+        )

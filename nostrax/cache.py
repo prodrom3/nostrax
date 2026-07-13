@@ -29,6 +29,7 @@ class CrawlCache:
         self._visited_path = os.path.join(cache_dir, "visited.json")
         self._results_path = os.path.join(cache_dir, "results.jsonl")
         self._frontier_path = os.path.join(cache_dir, "frontier.json")
+        self._incremental_path = os.path.join(cache_dir, "incremental.json")
         self._visited: set[str] = set()
         self._results_fh: IO[str] | None = None
 
@@ -117,6 +118,33 @@ class CrawlCache:
             logger.warning("Could not load frontier cache: %s", e)
             return []
 
+    def save_incremental(self, store: dict) -> None:
+        """Persist the incremental-crawl store atomically.
+
+        ``store`` maps a normalized URL to a record of its last successful
+        crawl: HTTP validators (etag/last_modified), a body hash, its depth,
+        and the links it produced - enough to reuse a page on a later 304
+        without re-downloading or re-parsing it.
+        """
+        tmp_path = self._incremental_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(store, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self._incremental_path)
+
+    def load_incremental(self) -> dict:
+        """Load the incremental-crawl store, or {} if none/corrupt."""
+        if not os.path.isfile(self._incremental_path):
+            return {}
+        try:
+            with open(self._incremental_path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Could not load incremental cache: %s", e)
+            return {}
+
     def load_results(self) -> list[UrlResult]:
         """Load previously saved results from disk."""
         results: list[UrlResult] = []
@@ -129,17 +157,7 @@ class CrawlCache:
                 if not line:
                     continue
                 try:
-                    d = json.loads(line)
-                    results.append(
-                        UrlResult(
-                            url=d["url"],
-                            source=d.get("source", ""),
-                            tag=d.get("tag", ""),
-                            depth=d.get("depth", 0),
-                            status=d.get("status"),
-                            response_time=d.get("response_time_ms"),
-                        )
-                    )
+                    results.append(UrlResult.from_dict(json.loads(line)))
                 except (json.JSONDecodeError, KeyError) as e:
                     logger.warning("Skipping corrupt cache line: %s", e)
         return results
@@ -147,7 +165,12 @@ class CrawlCache:
     def clear(self) -> None:
         """Delete all cache files. Closes any open result handle first."""
         self.close()
-        for path in [self._visited_path, self._results_path, self._frontier_path]:
+        for path in [
+            self._visited_path,
+            self._results_path,
+            self._frontier_path,
+            self._incremental_path,
+        ]:
             if os.path.isfile(path):
                 os.unlink(path)
         logger.info("Cache cleared: %s", self._dir)

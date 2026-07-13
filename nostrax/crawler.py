@@ -6,6 +6,7 @@ Licensed under the MIT License.
 
 import asyncio
 import datetime
+import hashlib
 import inspect
 import logging
 import random
@@ -13,12 +14,13 @@ import time
 from collections.abc import Callable
 from email.utils import parsedate_to_datetime
 from functools import partial
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 from urllib.parse import urlparse, urljoin
 
 import aiohttp
 
 from nostrax.cache import CrawlCache
+from nostrax.content import PageContent, extract_content
 from nostrax.exceptions import FetchError, NostraxError
 from nostrax.extractor import extract_urls
 from nostrax.metrics import MetricsSink, NullMetricsSink
@@ -340,6 +342,102 @@ async def fetch_page(
     return None, 0
 
 
+class ConditionalFetch(NamedTuple):
+    """Result of a conditional (incremental) fetch.
+
+    ``status`` is the HTTP status (0 on network failure). ``html`` is the
+    body on a fresh 200, and ``None`` on 304, error, or non-HTML. ``etag``
+    and ``last_modified`` are the validators to store for next time.
+    """
+
+    status: int
+    html: str | None
+    etag: str | None
+    last_modified: str | None
+    elapsed: float
+
+
+async def _fetch_conditional(
+    session: aiohttp.ClientSession,
+    url: str,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    max_response_size: int = DEFAULT_MAX_RESPONSE_SIZE,
+    retries: int = DEFAULT_RETRIES,
+    proxy: str | None = None,
+    connect_timeout: float | None = None,
+    read_timeout: float | None = None,
+) -> ConditionalFetch:
+    """Fetch ``url`` with If-None-Match / If-Modified-Since for incremental crawls.
+
+    Returns a :class:`ConditionalFetch`. A ``304 Not Modified`` yields
+    ``status=304, html=None`` (the caller reuses cached content); a fresh
+    ``200`` yields the body plus any new ETag/Last-Modified.
+    """
+    client_timeout = _build_timeout(timeout, connect_timeout, read_timeout)
+    conditional_headers: dict[str, str] = {}
+    if etag:
+        conditional_headers["If-None-Match"] = etag
+    if last_modified:
+        conditional_headers["If-Modified-Since"] = last_modified
+
+    for attempt in range(1 + retries):
+        start = time.monotonic()
+        try:
+            async with session.get(
+                url,
+                timeout=client_timeout,
+                allow_redirects=False,
+                proxy=proxy,
+                headers=conditional_headers,
+            ) as response:
+                elapsed = (time.monotonic() - start) * 1000
+                status = response.status
+
+                if status == 304:
+                    return ConditionalFetch(304, None, etag, last_modified, elapsed)
+
+                content_type = response.content_type or ""
+                if content_type and not any(ct in content_type for ct in _HTML_CONTENT_TYPES):
+                    return ConditionalFetch(status, None, None, None, elapsed)
+
+                if status >= 400:
+                    retryable = status in _RETRYABLE_STATUSES or 500 <= status < 600
+                    if retryable and attempt < retries:
+                        retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+                        delay = (
+                            min(retry_after, MAX_RETRY_AFTER)
+                            if retry_after is not None
+                            else random.uniform(0, 2**attempt)
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    return ConditionalFetch(status, None, None, None, elapsed)
+
+                content_length = response.content_length
+                if content_length is not None and content_length > max_response_size:
+                    return ConditionalFetch(status, None, None, None, elapsed)
+                body = await response.content.read(max_response_size + 1)
+                if len(body) > max_response_size:
+                    return ConditionalFetch(status, None, None, None, elapsed)
+
+                text = body.decode(response.charset or "utf-8", errors="replace")
+                new_etag = response.headers.get("ETag")
+                new_last_modified = response.headers.get("Last-Modified")
+                return ConditionalFetch(status, text, new_etag, new_last_modified, elapsed)
+
+        except (aiohttp.ClientError, TimeoutError):
+            elapsed = (time.monotonic() - start) * 1000
+            if attempt < retries:
+                await asyncio.sleep(random.uniform(0, 2**attempt))
+                continue
+            return ConditionalFetch(0, None, None, None, elapsed)
+
+    return ConditionalFetch(0, None, None, None, 0.0)
+
+
 async def _attach_statuses(
     session: aiohttp.ClientSession,
     results: list[UrlResult],
@@ -395,16 +493,18 @@ async def crawl_async(
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
+    collect_content: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
     retries: int = DEFAULT_RETRIES,
     scope: str | None = None,
     strategy: str = "dfs",
     cache_dir: str | None = None,
+    incremental: bool = False,
     check_status: bool = False,
     metrics: MetricsSink | None = None,
     fetcher: Fetcher | None = None,
     extractor: Extractor | None = None,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Crawl a URL and optionally follow links concurrently.
 
     Args:
@@ -433,11 +533,18 @@ async def crawl_async(
         auth: Tuple of (username, password) for HTTP basic auth.
         use_sitemap: Also parse sitemap.xml for URLs.
         include_metadata: Return UrlResult objects instead of plain strings.
+        collect_content: Extract page metadata (title, description, canonical,
+            language, Open Graph, JSON-LD) for each crawled page and return a
+            list of PageContent instead of URL results. Links are still
+            followed so ``depth`` works.
         progress_callback: Called with (pages_crawled, urls_found) after each page.
         retries: Number of retry attempts for failed requests.
         scope: URL path prefix to restrict crawling to (e.g. "/docs/").
         strategy: Crawl strategy - "dfs" (depth-first) or "bfs" (breadth-first).
         cache_dir: Directory to cache crawl state for resume support.
+        incremental: Re-crawl using stored ETag / Last-Modified validators so
+            unchanged pages return 304 and are reused from cache instead of
+            re-downloaded. Requires ``cache_dir`` and the default fetcher.
         check_status: When True, HEAD every discovered URL with the same
             aiohttp session used for the crawl and attach the status code
             to each UrlResult. Requires ``include_metadata=True``.
@@ -448,6 +555,13 @@ async def crawl_async(
     if check_status and not include_metadata:
         raise ValueError(
             "check_status=True requires include_metadata=True to attach status to results"
+        )
+    if incremental and not cache_dir:
+        raise ValueError("incremental=True requires cache_dir for validator storage")
+    if incremental and fetcher is not None:
+        raise ValueError(
+            "incremental=True uses conditional requests and cannot be combined "
+            "with a custom fetcher"
         )
     if metrics is None:
         metrics = NullMetricsSink()
@@ -491,6 +605,7 @@ async def crawl_async(
     completed: set[str] = set()
     pending: dict[str, tuple[str, int]] = {}
     all_results: list[UrlResult] = []
+    page_contents: list[PageContent] = []
     semaphore = asyncio.Semaphore(max_concurrent)
     robots = RobotsChecker(user_agent) if respect_robots else None
     loop = asyncio.get_running_loop()
@@ -500,18 +615,32 @@ async def crawl_async(
     cache = None
     had_cached_results = False
     resume_frontier: list[tuple[str, int]] = []
+    # Incremental state: prior records keyed by normalized URL, and the fresh
+    # store built during this crawl (saved at the end).
+    incremental_prior: dict = {}
+    incremental_new: dict = {}
     if cache_dir:
         cache = CrawlCache(cache_dir)
         cache.initialize()
-        completed = cache.visited  # shared ref; cache.mark_visited updates it
-        cached_results = cache.load_results()
-        if cached_results:
-            all_results.extend(cached_results)
-            had_cached_results = True
-            logger.info("Resumed with %d cached results", len(cached_results))
-        resume_frontier = cache.load_frontier()
-        if resume_frontier:
-            logger.info("Resuming with %d pending frontier URLs", len(resume_frontier))
+        if incremental:
+            # A fresh crawl (no resume skipping) that consults stored
+            # validators; we do not preload visited/frontier/results.
+            incremental_prior = cache.load_incremental()
+            if incremental_prior:
+                logger.info(
+                    "Incremental recrawl with %d cached page records",
+                    len(incremental_prior),
+                )
+        else:
+            completed = cache.visited  # shared ref; cache.mark_visited updates it
+            cached_results = cache.load_results()
+            if cached_results:
+                all_results.extend(cached_results)
+                had_cached_results = True
+                logger.info("Resumed with %d cached results", len(cached_results))
+            resume_frontier = cache.load_frontier()
+            if resume_frontier:
+                logger.info("Resuming with %d pending frontier URLs", len(resume_frontier))
 
     basic_auth = aiohttp.BasicAuth(auth[0], auth[1]) if auth else None
 
@@ -646,9 +775,134 @@ async def crawl_async(
                     cache.mark_visited(normalized)
                 pending.pop(normalized, None)
 
-            async def _process_one(current_url: str, current_depth: int) -> None:
-                nonlocal pages_crawled
+            def _extract(html: str, current_url: str, current_depth: int) -> "list[UrlResult]":
+                found = cast(
+                    "list[UrlResult]",
+                    extractor(
+                        html,
+                        current_url,
+                        tags=tags,
+                        deduplicate=False,
+                        include_metadata=True,
+                        depth=current_depth,
+                    ),
+                )
+                # Guard against custom extractors that ignore
+                # include_metadata=True and return list[str].
+                if found and not isinstance(found[0], UrlResult):
+                    raise TypeError(
+                        f"Extractor returned {type(found[0]).__name__} but "
+                        f"the crawler requires UrlResult when called with "
+                        f"include_metadata=True. Custom Extractor "
+                        f"implementations must honour the flag."
+                    )
+                return found
 
+            async def _ingest(
+                current_url: str,
+                current_depth: int,
+                normalized: str,
+                found: "list[UrlResult]",
+                resp_time: float,
+                html: str | None,
+            ) -> None:
+                """Record a page's results, metrics, content, and children.
+
+                Shared by the normal and incremental fetch paths. ``html`` is
+                None for a 304-reused page (no content extraction possible).
+                """
+                nonlocal pages_crawled
+                for r in found:
+                    r.response_time = resp_time
+                all_results.extend(found)
+
+                # Mark done only after a successful fetch. A failed fetch
+                # stays in ``pending`` so a resume retries it.
+                _mark_done(normalized)
+                if cache and not incremental:
+                    for r in found:
+                        cache.save_result(r)
+
+                if collect_content and html is not None:
+                    page_contents.append(
+                        await loop.run_in_executor(
+                            None,
+                            partial(extract_content, html, current_url, depth=current_depth),
+                        )
+                    )
+
+                pages_crawled += 1
+                if progress_callback is not None:
+                    progress_callback(pages_crawled, len(all_results))
+                try:
+                    metrics.on_page_fetched(current_url, current_depth, resp_time, len(found))
+                except Exception as e:
+                    logger.warning("metrics sink raised in on_page_fetched: %s", e)
+
+                if len(all_results) >= max_urls:
+                    logger.warning("Reached max URL limit (%d), stopping crawl.", max_urls)
+                    return
+
+                if current_depth < depth:
+                    for result in found:
+                        if _should_follow(result.url):
+                            await _enqueue(result.url, current_depth + 1)
+
+            async def _process_incremental(
+                current_url: str,
+                current_depth: int,
+                normalized: str,
+                current_proxy: str | None,
+                limiter_key: str,
+            ) -> None:
+                prior = incremental_prior.get(normalized)
+                cf = await _fetch_conditional(
+                    session,
+                    current_url,
+                    etag=prior.get("etag") if prior else None,
+                    last_modified=prior.get("last_modified") if prior else None,
+                    timeout=timeout,
+                    max_response_size=max_response_size,
+                    retries=retries,
+                    proxy=current_proxy,
+                    connect_timeout=connect_timeout,
+                    read_timeout=read_timeout,
+                )
+                rate_limiter.record(limiter_key, cf.elapsed / 1000.0, cf.status != 0)
+
+                if cf.status == 304 and prior is not None:
+                    # Unchanged: reuse the cached links and carry the record
+                    # forward without re-downloading or re-parsing.
+                    logger.debug("Unchanged (304): %s", current_url)
+                    found = [UrlResult.from_dict(d) for d in prior.get("links", [])]
+                    incremental_new[normalized] = prior
+                    await _ingest(current_url, current_depth, normalized, found, cf.elapsed, None)
+                    return
+
+                if cf.html is None:
+                    try:
+                        metrics.on_fetch_failed(current_url, current_depth)
+                    except Exception as e:
+                        logger.warning("metrics sink raised in on_fetch_failed: %s", e)
+                    return
+
+                found = await loop.run_in_executor(
+                    None, partial(_extract, cf.html, current_url, current_depth)
+                )
+                body_hash = hashlib.sha256(cf.html.encode("utf-8", "ignore")).hexdigest()
+                changed = not prior or prior.get("hash") != body_hash
+                logger.debug("%s: %s", "Changed" if changed else "Rehashed", current_url)
+                incremental_new[normalized] = {
+                    "url": current_url,
+                    "etag": cf.etag,
+                    "last_modified": cf.last_modified,
+                    "hash": body_hash,
+                    "depth": current_depth,
+                    "links": [r.to_dict() for r in found],
+                }
+                await _ingest(current_url, current_depth, normalized, found, cf.elapsed, cf.html)
+
+            async def _process_one(current_url: str, current_depth: int) -> None:
                 normalized = normalize_url(current_url)
                 if normalized in completed:
                     pending.pop(normalized, None)
@@ -677,6 +931,12 @@ async def crawl_async(
                 await rate_limiter.wait(limiter_key)
 
                 logger.info("Crawling [depth=%d]: %s", current_depth, current_url)
+                if incremental:
+                    await _process_incremental(
+                        current_url, current_depth, normalized, current_proxy, limiter_key
+                    )
+                    return
+
                 html, resp_time = await fetcher(
                     session,
                     current_url,
@@ -699,65 +959,10 @@ async def crawl_async(
                         logger.warning("metrics sink raised in on_fetch_failed: %s", e)
                     return
 
-                # Called with include_metadata=True, so the extractor returns
-                # list[UrlResult]; the isinstance check below enforces it for
-                # custom extractors that ignore the flag.
-                found = cast(
-                    "list[UrlResult]",
-                    await loop.run_in_executor(
-                        None,
-                        partial(
-                            extractor,
-                            html,
-                            current_url,
-                            tags=tags,
-                            deduplicate=False,
-                            include_metadata=True,
-                            depth=current_depth,
-                        ),
-                    ),
+                found = await loop.run_in_executor(
+                    None, partial(_extract, html, current_url, current_depth)
                 )
-
-                # Guard against custom extractors that ignore
-                # include_metadata=True and return list[str]. Without this
-                # check the crawl would crash at r.response_time = ...
-                # with a cryptic AttributeError far from the real cause.
-                if found and not isinstance(found[0], UrlResult):
-                    raise TypeError(
-                        f"Extractor returned {type(found[0]).__name__} but "
-                        f"the crawler requires UrlResult when called with "
-                        f"include_metadata=True. Custom Extractor "
-                        f"implementations must honour the flag."
-                    )
-
-                for r in found:
-                    r.response_time = resp_time
-                all_results.extend(found)
-
-                # Mark done only after a successful fetch. A failed fetch
-                # (html is None, handled above) stays in ``pending`` so a
-                # resume retries it instead of silently dropping its subtree.
-                _mark_done(normalized)
-                if cache:
-                    for r in found:
-                        cache.save_result(r)
-
-                pages_crawled += 1
-                if progress_callback is not None:
-                    progress_callback(pages_crawled, len(all_results))
-                try:
-                    metrics.on_page_fetched(current_url, current_depth, resp_time, len(found))
-                except Exception as e:
-                    logger.warning("metrics sink raised in on_page_fetched: %s", e)
-
-                if len(all_results) >= max_urls:
-                    logger.warning("Reached max URL limit (%d), stopping crawl.", max_urls)
-                    return
-
-                if current_depth < depth:
-                    for result in found:
-                        if _should_follow(result.url):
-                            await _enqueue(result.url, current_depth + 1)
+                await _ingest(current_url, current_depth, normalized, found, resp_time, html)
 
             # Capture the first exception raised inside any worker so it
             # propagates out of crawl_async after frontier.join() completes.
@@ -812,8 +1017,11 @@ async def crawl_async(
     finally:
         if cache:
             try:
-                cache.save_visited()
-                cache.save_frontier(list(pending.values()))
+                if incremental:
+                    cache.save_incremental(incremental_new)
+                else:
+                    cache.save_visited()
+                    cache.save_frontier(list(pending.values()))
             finally:
                 cache.close()
 
@@ -823,6 +1031,17 @@ async def crawl_async(
             "no pages were successfully fetched; check connectivity, "
             "robots.txt, and logs for details",
         )
+
+    if collect_content:
+        if deduplicate:
+            seen_pages: set[str] = set()
+            unique_pages: list[PageContent] = []
+            for pc in page_contents:
+                if pc.url not in seen_pages:
+                    seen_pages.add(pc.url)
+                    unique_pages.append(pc)
+            page_contents = unique_pages
+        return page_contents
 
     if deduplicate:
         seen: set[str] = set()
@@ -861,15 +1080,17 @@ def crawl(
     auth: tuple[str, str] | None = None,
     use_sitemap: bool = False,
     include_metadata: bool = False,
+    collect_content: bool = False,
     retries: int = DEFAULT_RETRIES,
     scope: str | None = None,
     strategy: str = "dfs",
     cache_dir: str | None = None,
+    incremental: bool = False,
     check_status: bool = False,
     metrics: MetricsSink | None = None,
     fetcher: Fetcher | None = None,
     extractor: Extractor | None = None,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Synchronous wrapper around crawl_async for simple usage."""
     return asyncio.run(
         crawl_async(
@@ -893,10 +1114,12 @@ def crawl(
             auth=auth,
             use_sitemap=use_sitemap,
             include_metadata=include_metadata,
+            collect_content=collect_content,
             retries=retries,
             scope=scope,
             strategy=strategy,
             cache_dir=cache_dir,
+            incremental=incremental,
             check_status=check_status,
             metrics=metrics,
             fetcher=fetcher,
@@ -911,14 +1134,15 @@ async def crawl_seeds_async(
     deduplicate: bool = True,
     include_metadata: bool = False,
     **kwargs: Any,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Crawl several seed URLs and return the merged, de-duplicated results.
 
     Each seed is crawled independently with :func:`crawl_async` - its own
     base domain, scope, and robots.txt - so seeds may span different sites.
     A seed that fails to fetch is logged and skipped rather than aborting
     the whole batch; the call raises :class:`FetchError` only when *every*
-    seed fails. Results are de-duplicated across seeds by normalized URL.
+    seed fails. Results are de-duplicated across seeds by URL. With
+    ``collect_content=True`` the merged list is of PageContent.
 
     ``cache_dir`` is not supported here: resume is a single-target concept,
     and a shared visited/frontier set across seeds would double-count
@@ -932,7 +1156,10 @@ async def crawl_seeds_async(
             "cache_dir is not supported with multiple seeds; crawl a single target to use resume"
         )
 
-    merged: list[UrlResult] = []
+    collect_content = bool(kwargs.get("collect_content"))
+    # Both UrlResult and PageContent expose ``.url``, so the merge and
+    # de-dup below are identical for the two modes.
+    merged: list = []
     failures = 0
     for seed in seeds:
         try:
@@ -941,8 +1168,7 @@ async def crawl_seeds_async(
             logger.warning("Skipping seed %s: %s", seed, e)
             failures += 1
             continue
-        # include_metadata=True above guarantees UrlResult items.
-        merged.extend(cast("list[UrlResult]", results))
+        merged.extend(results)
 
     if failures == len(seeds):
         raise FetchError(
@@ -952,15 +1178,15 @@ async def crawl_seeds_async(
 
     if deduplicate:
         seen: set[str] = set()
-        unique: list[UrlResult] = []
+        unique: list = []
         for r in merged:
-            norm = normalize_url(r.url)
-            if norm not in seen:
-                seen.add(norm)
+            key = r.url if collect_content else normalize_url(r.url)
+            if key not in seen:
+                seen.add(key)
                 unique.append(r)
         merged = unique
 
-    if include_metadata:
+    if collect_content or include_metadata:
         return merged
     return [r.url for r in merged]
 
@@ -971,7 +1197,7 @@ def crawl_seeds(
     deduplicate: bool = True,
     include_metadata: bool = False,
     **kwargs: Any,
-) -> list[str] | list[UrlResult]:
+) -> list[str] | list[UrlResult] | list[PageContent]:
     """Synchronous wrapper around :func:`crawl_seeds_async`."""
     return asyncio.run(
         crawl_seeds_async(

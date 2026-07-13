@@ -63,6 +63,26 @@ def test_main_proxy_file_builds_pool(mock_crawl, _mock_valid, tmp_path):
 
 @patch("nostrax.cli.validate_target_url", return_value=None)
 @patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
+def test_main_content_mode_outputs_page_content(mock_crawl, _mock_valid, capsys):
+    from nostrax.content import PageContent
+
+    mock_crawl.return_value = [PageContent(url="https://example.com/", title="Example", lang="en")]
+    rc = main(["-t", "https://example.com", "--content", "-f", "json"])
+    assert rc == 0
+    # crawl_async was asked to collect content
+    assert mock_crawl.call_args.kwargs["collect_content"] is True
+    out = capsys.readouterr().out
+    assert '"title": "Example"' in out
+
+
+@patch("nostrax.cli.validate_target_url", return_value=None)
+def test_main_content_rejects_graph_format(_mock_valid):
+    with pytest.raises(SystemExit):
+        main(["-t", "https://example.com", "--content", "-f", "dot"])
+
+
+@patch("nostrax.cli.validate_target_url", return_value=None)
+@patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
 def test_main_auto_throttle_flags(mock_crawl, _mock_valid):
     mock_crawl.return_value = ["https://example.com/x"]
     rc = main(

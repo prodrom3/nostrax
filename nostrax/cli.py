@@ -29,7 +29,7 @@ from nostrax.filters import (
     filter_by_protocol,
 )
 from nostrax.models import UrlResult
-from nostrax.output import write_output
+from nostrax.output import write_content_output, write_output
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -234,6 +234,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check HTTP status code of each discovered URL",
     )
     parser.add_argument(
+        "--content",
+        action="store_true",
+        help="Scrape page metadata (title, description, canonical, language, "
+        "Open Graph, JSON-LD) for each crawled page instead of URLs. "
+        "Output as plain/json/jsonl/csv.",
+    )
+    parser.add_argument(
         "--metadata",
         action="store_true",
         help="Include source page, tag type, and depth in output",
@@ -267,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Directory to cache crawl state for resume support",
+    )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Re-crawl using stored ETag/Last-Modified validators so unchanged "
+        "pages return 304 and are reused from cache (requires --cache-dir)",
     )
     parser.add_argument(
         "--no-config",
@@ -386,6 +399,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.auto_throttle_max_delay <= 0:
         parser.error("--auto-throttle-max-delay must be > 0")
+    if args.content and args.format in ("html", "dot", "graphml"):
+        parser.error("--content supports only plain, json, jsonl, or csv output")
+    if args.incremental and not args.cache_dir:
+        parser.error("--incremental requires --cache-dir")
     if args.depth < 0:
         parser.error("--depth must be >= 0")
     if args.timeout <= 0:
@@ -463,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
         auth=auth,
         use_sitemap=args.sitemap,
         include_metadata=need_metadata,
+        collect_content=args.content,
         retries=args.retries,
         scope=args.scope,
         strategy=args.strategy,
@@ -479,6 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                     seeds[0],
                     progress_callback=progress_callback,
                     cache_dir=args.cache_dir,
+                    incremental=args.incremental,
                     **crawl_kwargs,
                 )
             )
@@ -500,6 +519,28 @@ def main(argv: list[str] | None = None) -> int:
     if not results:
         logging.getLogger(__name__).warning("No URLs found.")
         return 1
+
+    # Content mode returns PageContent; filter by page URL and write via the
+    # dedicated content formatter, then we are done.
+    if args.content:
+        pages = cast("list", results)
+        page_urls = [p.url for p in pages]
+        page_urls = filter_by_domain(page_urls, filter_base, mode=args.domain)
+        if args.protocol:
+            protocols = {p.strip() for p in args.protocol.split(",")}
+            page_urls = filter_by_protocol(page_urls, protocols)
+        if args.pattern:
+            page_urls = filter_by_pattern(page_urls, args.pattern)
+        if args.exclude:
+            page_urls = filter_by_exclude(page_urls, args.exclude)
+        kept = set(page_urls)
+        pages = [p for p in pages if p.url in kept]
+        if args.sort:
+            pages.sort(key=lambda p: p.url)
+        if not args.silent:
+            content_fmt = args.format if args.format in ("json", "jsonl", "csv") else "plain"
+            write_content_output(pages, fmt=content_fmt, output_file=args.output)
+        return 0
 
     # Split the crawl output into cleanly-typed views: a UrlResult list when
     # metadata was requested, and a plain URL list for filtering either way.

@@ -104,6 +104,18 @@ ignore = [
 # Tests deliberately assert on the broad NostraxError -> Exception surface.
 "tests/*" = ["B011", "B017"]
 
+[tool.coverage.run]
+source = ["nostrax"]
+omit = ["nostrax/__main__.py"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "def __repr__",
+    "\\.\\.\\.",  # Protocol / overload stubs
+]
+
 [tool.mypy]
 python_version = "3.10"
 files = ["nostrax"]
