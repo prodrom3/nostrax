@@ -70,7 +70,8 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 - **Async I/O** via `aiohttp` with shared session, connection pooling, and DNS caching
 - **Unified DFS / BFS engine** sharing a bounded frontier and a worker pool, so `--strategy bfs` runs at the same concurrency as `--strategy dfs`
-- **Full-jitter retry** for transient failures only - network errors, timeouts, and 408/429/5xx are retried; a deterministic 4xx (404, 403, 410) returns immediately instead of burning the retry budget
+- **Full-jitter retry** for transient failures only - network errors, timeouts, and 408/429/5xx are retried; a deterministic 4xx (404, 403, 410) returns immediately instead of burning the retry budget. A server's `Retry-After` header (seconds or HTTP-date) is honoured on 429/503, capped at 120 s
+- **Adaptive throttling** (`--auto-throttle`): the per-host delay tracks server latency and backs off on failures, bounded by `--auto-throttle-max-delay`, with `--rate-limit` as the hard floor
 - **Separated timeouts**: total, connect, and per-read budgets can be set independently
 - **Content-Type aware** - skips non-HTML responses before downloading
 - **Response size limits** prevent memory exhaustion (default 10 MB for pages, 1 MiB for robots.txt, 50 MiB for sitemaps)
@@ -105,6 +106,7 @@ The name derives from "Nostos" - the Greek concept of a heroic return journey - 
 
 - HTTP basic authentication
 - HTTP, HTTPS, SOCKS4, SOCKS5 proxy support, **credentials redacted from logs**
+- **Proxy pool / egress rotation** via `--proxy-file`: requests rotate round-robin across a list of proxies, with the rate limit enforced per `(host, proxy)` so aggregate throughput scales with the pool while each egress IP stays polite
 - **Broken link checker** via concurrent HEAD requests on the same aiohttp session the crawl used (one DNS/TLS handshake per host, not two)
 - **Progress bar** via optional `tqdm` dependency
 - **Config file** via `.nostraxrc` (TOML format)
@@ -438,7 +440,8 @@ usage: nostrax [-h] [-V] [--check-update] [-t TARGET] [--input-file FILE]
                [--timeout TIMEOUT] [--connect-timeout SECS] [--read-timeout SECS]
                [--user-agent USER_AGENT] [-v] [--no-dedup]
                [--max-concurrent N] [--respect-robots] [--max-urls N]
-               [--rate-limit SECS] [--proxy URL] [--auth USER:PASS]
+               [--rate-limit SECS] [--auto-throttle] [--auto-throttle-max-delay SECS]
+               [--proxy URL] [--proxy-file FILE] [--auth USER:PASS]
                [--sitemap] [--check-status] [--metadata] [--progress]
                [--retries N] [--scope PATH] [--strategy {dfs,bfs}]
                [--cache-dir DIR] [--no-config]
@@ -472,8 +475,11 @@ usage: nostrax [-h] [-V] [--check-update] [-t TARGET] [--input-file FILE]
 | `--max-concurrent` | Max concurrent HTTP requests (default: 10) |
 | `--respect-robots` | Check robots.txt before crawling |
 | `--max-urls` | Stop crawling after this many URLs (default: 50000) |
-| `--rate-limit` | Minimum seconds between requests **per host** (default: 0) |
+| `--rate-limit` | Minimum seconds between requests **per host** (default: 0; per `(host, proxy)` with a pool) |
+| `--auto-throttle` | Adapt the per-host delay to server latency and back off on failures |
+| `--auto-throttle-max-delay` | Upper bound on the adaptive delay in seconds (default: 60) |
 | `--proxy` | Proxy URL (`http`, `https`, `socks4`, `socks5`) |
+| `--proxy-file` | File of proxy URLs (one per line) rotated round-robin per request |
 | `--auth` | HTTP basic auth as `user:password` |
 | `--sitemap` | Also parse sitemaps (robots.txt `Sitemap:` directives + `/sitemap.xml`) |
 | `--check-status` | Check HTTP status code of each discovered URL |

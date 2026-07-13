@@ -26,7 +26,12 @@ SAMPLE_HTML_PAGE2 = """
 
 
 def _make_mock_response(
-    text, status=200, content_length=None, content_type="text/html", charset="utf-8"
+    text,
+    status=200,
+    content_length=None,
+    content_type="text/html",
+    charset="utf-8",
+    headers=None,
 ):
     """Create a mock aiohttp response usable as an async context manager.
 
@@ -44,6 +49,7 @@ def _make_mock_response(
     mock_resp.content_length = content_length
     mock_resp.content_type = content_type
     mock_resp.charset = charset
+    mock_resp.headers = headers if headers is not None else {}
     mock_resp.raise_for_status = MagicMock()
 
     mock_content = MagicMock()
@@ -192,6 +198,66 @@ async def test_fetch_page_retries_server_error_status(monkeypatch):
     html, _ = await fetch_page(mock_session, "https://example.com", retries=2)
     assert html is None
     assert mock_session.get.call_count == 3  # initial + 2 retries
+
+
+def test_parse_retry_after_seconds():
+    from nostrax.crawler import _parse_retry_after
+
+    assert _parse_retry_after("30") == 30.0
+    assert _parse_retry_after("  0 ") == 0.0
+    assert _parse_retry_after(None) is None
+    assert _parse_retry_after("") is None
+    assert _parse_retry_after("garbage") is None
+
+
+def test_parse_retry_after_http_date():
+    from nostrax.crawler import _parse_retry_after
+
+    # A date far in the future yields a large positive delay; a past date
+    # clamps to 0.
+    future = _parse_retry_after("Wed, 21 Oct 2099 07:28:00 GMT")
+    assert future is not None and future > 0
+    past = _parse_retry_after("Wed, 21 Oct 2015 07:28:00 GMT")
+    assert past == 0.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_honours_retry_after(monkeypatch):
+    """A 503 with Retry-After waits exactly that long (capped), not jitter."""
+    slept: list[float] = []
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    mock_resp = _make_mock_response("busy", status=503, headers={"Retry-After": "7"})
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    html, _ = await fetch_page(mock_session, "https://example.com", retries=1)
+    assert html is None
+    assert slept == [7.0]  # honoured the header, not random jitter
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_caps_retry_after(monkeypatch):
+    """An absurd Retry-After is clamped to MAX_RETRY_AFTER."""
+    from nostrax.crawler import MAX_RETRY_AFTER
+
+    slept: list[float] = []
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    monkeypatch.setattr("nostrax.crawler.asyncio.sleep", fake_sleep)
+
+    mock_resp = _make_mock_response("busy", status=429, headers={"Retry-After": "999999"})
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=mock_resp)
+
+    await fetch_page(mock_session, "https://example.com", retries=1)
+    assert slept == [MAX_RETRY_AFTER]
 
 
 @pytest.mark.asyncio
@@ -397,6 +463,52 @@ def test_crawl_seeds_all_fail_raises():
 def test_crawl_seeds_rejects_cache_dir():
     with pytest.raises(ValueError):
         crawl_seeds(["https://a.test"], cache_dir="cache")
+
+
+def test_crawl_rotates_proxy_pool_across_fetches():
+    """With a proxy pool, successive page fetches go out through different
+    proxies (round-robin), so egress is spread across IPs."""
+    pages = {
+        "https://p.test": '<a href="https://p.test/1">1</a><a href="https://p.test/2">2</a>',
+        "https://p.test/1": "leaf",
+        "https://p.test/2": "leaf",
+    }
+    used_proxies: list[str] = []
+
+    async def fake_fetch(session, url, *, proxy=None, **kw):
+        used_proxies.append(proxy)
+        return (pages.get(url.rstrip("/")), 1.0)
+
+    crawl(
+        "https://p.test",
+        depth=1,
+        fetcher=fake_fetch,
+        proxies=["http://a:1", "http://b:2"],
+    )
+    # 3 pages fetched; proxies rotate round-robin over the pool of 2.
+    assert len(used_proxies) == 3
+    assert set(used_proxies) == {"http://a:1", "http://b:2"}
+    assert used_proxies[0] != used_proxies[1]  # actually alternating
+
+
+def test_crawl_auto_throttle_runs():
+    """Smoke: auto_throttle uses the adaptive limiter without breaking a crawl."""
+    pages = {
+        "https://t.test": '<a href="https://t.test/1">1</a>',
+        "https://t.test/1": "leaf",
+    }
+
+    async def fake_fetch(session, url, **kw):
+        return (pages.get(url.rstrip("/")), 5.0)
+
+    results = crawl(
+        "https://t.test",
+        depth=1,
+        fetcher=fake_fetch,
+        auto_throttle=True,
+        auto_throttle_max_delay=2.0,
+    )
+    assert "https://t.test/1" in results
 
 
 def test_crawl_depth_one():

@@ -189,13 +189,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--rate-limit",
         type=float,
         default=0,
-        help="Minimum seconds between requests (default: 0, no limit)",
+        help="Minimum seconds between requests per host (default: 0, no limit). "
+        "With --proxy-file, enforced per (host, proxy).",
+    )
+    parser.add_argument(
+        "--auto-throttle",
+        action="store_true",
+        help="Adapt the per-host delay to server latency and back off on "
+        "failures (AutoThrottle). --rate-limit is the hard floor.",
+    )
+    parser.add_argument(
+        "--auto-throttle-max-delay",
+        type=float,
+        default=60.0,
+        help="Upper bound on the adaptive delay in seconds (default: 60)",
     )
     parser.add_argument(
         "--proxy",
         type=str,
         default=None,
         help="Proxy URL (e.g. http://proxy:8080)",
+    )
+    parser.add_argument(
+        "--proxy-file",
+        type=str,
+        default=None,
+        help="File of proxy URLs (one per line; # comments ignored) rotated "
+        "round-robin per request to spread egress across IPs",
     )
     parser.add_argument(
         "--auth",
@@ -264,23 +284,29 @@ def _parse_auth(auth_str: str) -> tuple[str, str]:
     return (user, password)
 
 
-def _read_seeds(path: str) -> list[str]:
-    """Read seed URLs from a file (or stdin when path is '-').
+def _read_list_file(path: str) -> list[str]:
+    """Read non-blank, non-comment lines from a file (or stdin when '-').
 
-    One URL per line; blank lines and lines starting with '#' are skipped.
+    One entry per line; blank lines and lines starting with '#' are skipped.
+    Used for both the seed list (--input-file) and the proxy pool
+    (--proxy-file).
     """
     if path == "-":
         text = sys.stdin.read()
     else:
         with open(path, encoding="utf-8") as f:
             text = f.read()
-    seeds = []
+    entries = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        seeds.append(line)
-    return seeds
+        entries.append(line)
+    return entries
+
+
+# Backwards-compatible alias; seed reading is just line reading.
+_read_seeds = _read_list_file
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -339,6 +365,27 @@ def main(argv: list[str] | None = None) -> int:
         err = validate_proxy_url(args.proxy)
         if err:
             parser.error(f"--proxy: {err}")
+
+    # Assemble the proxy pool from --proxy-file (+ --proxy). Invalid proxies
+    # are skipped with a warning; the pool is rotated across egress IPs.
+    proxies: list[str] = []
+    if args.proxy_file:
+        try:
+            raw_proxies = _read_list_file(args.proxy_file)
+        except OSError as e:
+            parser.error(f"--proxy-file: {e}")
+        for p in ([args.proxy] if args.proxy else []) + raw_proxies:
+            perr = validate_proxy_url(p)
+            if perr:
+                logging.getLogger(__name__).warning("Skipping proxy %s: %s", p, perr)
+                continue
+            if p not in proxies:
+                proxies.append(p)
+        if not proxies:
+            parser.error("--proxy-file: no valid proxy URLs found")
+
+    if args.auto_throttle_max_delay <= 0:
+        parser.error("--auto-throttle-max-delay must be > 0")
     if args.depth < 0:
         parser.error("--depth must be >= 0")
     if args.timeout <= 0:
@@ -410,6 +457,9 @@ def main(argv: list[str] | None = None) -> int:
         max_urls=args.max_urls,
         rate_limit=args.rate_limit,
         proxy=args.proxy,
+        proxies=proxies or None,
+        auto_throttle=args.auto_throttle,
+        auto_throttle_max_delay=args.auto_throttle_max_delay,
         auth=auth,
         use_sitemap=args.sitemap,
         include_metadata=need_metadata,

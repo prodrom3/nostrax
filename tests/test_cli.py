@@ -49,6 +49,37 @@ def test_main_input_file_with_cache_dir_errors(_mock_valid, tmp_path):
         main(["--input-file", str(seedfile), "--cache-dir", "cache"])
 
 
+@patch("nostrax.cli.validate_target_url", return_value=None)
+@patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
+def test_main_proxy_file_builds_pool(mock_crawl, _mock_valid, tmp_path):
+    mock_crawl.return_value = ["https://example.com/x"]
+    pf = tmp_path / "proxies.txt"
+    pf.write_text("http://a:1\n# comment\nhttp://b:2\n", encoding="utf-8")
+
+    rc = main(["-t", "https://example.com", "--proxy-file", str(pf)])
+    assert rc == 0
+    assert mock_crawl.call_args.kwargs["proxies"] == ["http://a:1", "http://b:2"]
+
+
+@patch("nostrax.cli.validate_target_url", return_value=None)
+@patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
+def test_main_auto_throttle_flags(mock_crawl, _mock_valid):
+    mock_crawl.return_value = ["https://example.com/x"]
+    rc = main(
+        [
+            "-t",
+            "https://example.com",
+            "--auto-throttle",
+            "--auto-throttle-max-delay",
+            "5",
+        ]
+    )
+    assert rc == 0
+    kwargs = mock_crawl.call_args.kwargs
+    assert kwargs["auto_throttle"] is True
+    assert kwargs["auto_throttle_max_delay"] == 5.0
+
+
 @patch("nostrax.cli.crawl_async", new_callable=AsyncMock)
 def test_main_basic(mock_crawl, capsys):
     mock_crawl.return_value = ["https://example.com/page1", "https://example.com/page2"]

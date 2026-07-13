@@ -12,6 +12,20 @@ are included in the first 2.0.0 artifact.
 
 ### Added
 
+- **`Retry-After` is honoured** on `429` / `503` responses: the crawler
+  waits exactly the interval the server asks for (delta-seconds or
+  HTTP-date), capped at `MAX_RETRY_AFTER` (120 s), instead of guessing
+  with jitter. Falls back to full-jitter backoff when the header is absent.
+- **Proxy pool / egress rotation.** `--proxy-file` (and the `proxies=`
+  kwarg) rotate requests round-robin across a list of proxies. The
+  `--rate-limit` floor is enforced per `(host, proxy)`, so N proxies give
+  up to N times the aggregate throughput to one host while each egress IP
+  stays within the polite limit. All existing controls (robots.txt,
+  rate-limit) still apply.
+- **Adaptive throttling** (`--auto-throttle`, Scrapy-style AutoThrottle):
+  the per-host delay tracks observed latency and backs off hard on
+  failures, bounded by `--auto-throttle-max-delay`; `--rate-limit` remains
+  the hard floor.
 - **True resumable crawl.** The pending frontier is now persisted to
   `frontier.json` and the visited/completed set is recorded only *after*
   a successful fetch. A crawl interrupted with `--cache-dir` set continues
