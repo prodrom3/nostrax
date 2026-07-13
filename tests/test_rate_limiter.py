@@ -7,6 +7,12 @@ import pytest
 
 from nostrax.crawler import AdaptiveRateLimiter, PerHostRateLimiter, ProxyPool
 
+# asyncio.sleep can return up to a timer tick early on coarse-resolution
+# platforms (Windows' default timer is ~15.6 ms), so a sleep(0.1) may
+# complete around 0.094 s. Allow that slack so the timing assertions below
+# test "spaced by ~the interval" without being flaky per-OS.
+_SLACK = 0.02
+
 
 def test_proxy_pool_round_robin():
     pool = ProxyPool(["http://a:1", "http://b:2", "http://c:3"])
@@ -78,7 +84,7 @@ async def test_serialises_per_host_within_interval():
     elapsed = time.monotonic() - t0
 
     # Second call must wait roughly min_interval after the first.
-    assert elapsed >= 0.1
+    assert elapsed >= 0.1 - _SLACK
     assert elapsed < 0.3
 
 
@@ -107,5 +113,5 @@ async def test_concurrent_waits_on_same_host_queue():
     results = await asyncio.gather(call(), call(), call())
     # Sorted to avoid relying on gather order.
     results.sort()
-    assert results[1] - results[0] >= 0.1
-    assert results[2] - results[1] >= 0.1
+    assert results[1] - results[0] >= 0.1 - _SLACK
+    assert results[2] - results[1] >= 0.1 - _SLACK
